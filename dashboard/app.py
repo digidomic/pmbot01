@@ -269,7 +269,14 @@ def run_dashboard(host: str = None, port: int = None, debug: bool = False):
     host = host or config.DASHBOARD_HOST
     port = port or config.DASHBOARD_PORT
     
+    # CRITICAL: Set static folder for CSS/JS to work
+    import os
+    repo_path = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    app.static_folder = os.path.join(repo_path, 'static')
+    app.template_folder = os.path.join(repo_path, 'dashboard/templates')
+    
     logger.info(f"Starting dashboard on {host}:{port}")
+    logger.info(f"Static folder: {app.static_folder}")
     socketio.run(app, host=host, port=port, debug=debug, allow_unsafe_werkzeug=True)
 
 
