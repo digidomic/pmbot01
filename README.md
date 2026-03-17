@@ -1,11 +1,14 @@
 # PM Bot - Polymarket Copy Trading Bot
 
-🤖 **PM Bot** is an automated copy trading bot for Polymarket that monitors a target user's trades and executes scaled copies in real-time.
+🤖 **PM Bot** is an automated trading bot for Polymarket with multiple strategies:
+- **Copy Trading**: Monitor and copy trades from target users
+- **Bitcoin Arbitrage**: Detect BTC price movements and trade prediction markets
 
 ## 🚀 Features
 
 - **Real-time Trade Monitoring**: Automatically detects new trades from target users
 - **Smart Scaling**: Copy trades with configurable percentage scaling and max amount limits
+- **Bitcoin Arbitrage**: WebSocket-powered BTC price monitoring with momentum detection
 - **Web Dashboard**: Live monitoring with trade history, statistics, and configuration
 - **Latency Tracking**: Measure and display trade execution latency
 - **24/7 Stability**: Robust error handling and graceful recovery
@@ -17,6 +20,8 @@
 pmbot01/
 ├── scraper/          # Polymarket Activity Scraping
 ├── trader/           # CLOB Client Integration
+├── strategies/       # Trading strategies
+│   └── bitcoin_arbitrage.py  # BTC price arbitrage strategy
 ├── dashboard/        # Web-UI (Flask/FastAPI + simple HTML/JS)
 ├── config/           # Settings management
 ├── database/         # SQLite für Trade-History
@@ -137,8 +142,14 @@ POLL_INTERVAL=30
 ### Running Modes
 
 ```bash
-# Full bot (trading + dashboard)
+# Full bot (trading + dashboard) - Copy Trading Strategy (default)
 python main.py
+
+# Copy Trading explicitly
+python main.py --strategy=copy
+
+# Bitcoin Arbitrage Strategy
+python main.py --strategy=bitcoin_arbitrage
 
 # Dashboard only
 python main.py --dashboard-only
@@ -154,9 +165,72 @@ python main.py --port 3000
 
 - **`scraper/`**: Polymarket profile scraping (fallback to web scraping)
 - **`trader/`**: CLOB client integration for order execution
+- **`strategies/`**: Trading strategies
+  - **`bitcoin_arbitrage.py`**: BTC price arbitrage with Coinbase WebSocket
 - **`dashboard/`**: Flask web app with SocketIO
 - **`database/`**: SQLite wrapper for trade persistence
 - **`config/`**: Configuration management
+
+## 🎯 Trading Strategies
+
+### 1. Copy Trading (Default)
+
+Monitors a target user's trades and copies them with configurable scaling.
+
+**Usage**:
+```bash
+python main.py --strategy=copy
+```
+
+**Features**:
+- Real-time monitoring of target user activity
+- Configurable trade scaling (percentage + max amount)
+- Automatic market validation
+- Latency tracking
+
+### 2. Bitcoin Arbitrage Strategy
+
+Monitors BTC price movements via Coinbase WebSocket and trades Bitcoin prediction markets on Polymarket.
+
+**Usage**:
+```bash
+python main.py --strategy=bitcoin_arbitrage
+```
+
+**Features**:
+- Real-time BTC price feed from Coinbase
+- Momentum-based signal generation
+- Dynamic threshold adjustment based on volatility
+- Position management with profit targets and stop-loss
+- Automatic market discovery on Polymarket
+
+**How it works**:
+1. Connects to Coinbase WebSocket for live BTC-USD prices
+2. Calculates price momentum (10-period average vs current)
+3. Generates signals when momentum exceeds threshold:
+   - **BUY_YES**: Strong upward momentum detected
+   - **BUY_NO**: Strong downward momentum detected
+4. Automatically finds and trades Bitcoin prediction markets
+5. Manages positions with profit targets and stop-loss
+
+**Configuration**:
+```env
+# Arbitrage Threshold (0.001 = 0.1% price movement)
+ARBITRAGE_THRESHOLD=0.001
+
+# Position Management
+MAX_POSITION_SIZE=50
+MIN_POSITION_SIZE=5
+
+# Profit Target & Stop Loss (0.02 = 2%, 0.01 = 1%)
+PROFIT_TARGET=0.02
+STOP_LOSS=0.01
+STOP_LOSS_TIMEOUT=300
+
+# Trading Settings
+COOLDOWN_SECONDS=60
+MAX_DAILY_TRADES=20
+```
 
 ## 🔒 Security Notes
 

@@ -21,6 +21,14 @@ from scraper.models import Trade, BotState, TargetProfile
 from scraper.polymarket_scraper import PolymarketScraper
 from trader.clob_trader import ClobTrader
 
+# Import strategies conditionally
+try:
+    from strategies import create_bitcoin_arbitrage_strategy, Signal
+    STRATEGIES_AVAILABLE = True
+except ImportError as e:
+    STRATEGIES_AVAILABLE = False
+    logging.warning(f"Strategies module not available: {e}")
+
 # Import dashboard conditionally
 try:
     from dashboard.app import run_dashboard, emit_trade_update, emit_stats_update
@@ -33,6 +41,10 @@ running = True
 db: DatabaseManager = None
 trader: ClobTrader = None
 scraper: PolymarketScraper = None
+
+# Strategy components
+bitcoin_strategy = None
+bitcoin_ws_client = None
 
 # Setup logging
 def setup_logging():
@@ -55,9 +67,17 @@ logger = None
 
 def signal_handler(signum, frame):
     """Handle shutdown signals gracefully"""
-    global running
+    global running, bitcoin_strategy, bitcoin_ws_client
     logger.info(f"Received signal {signum}, shutting down...")
     running = False
+    
+    # Stop strategy components
+    if bitcoin_ws_client:
+        logger.info("Stopping Bitcoin WebSocket client...")
+        bitcoin_ws_client.stop()
+    if bitcoin_strategy:
+        logger.info("Stopping Bitcoin strategy...")
+        bitcoin_strategy.stop()
 
 
 def is_bot_running() -> bool:
@@ -246,7 +266,8 @@ def init_bot_state():
 
 def main():
     """Main entry point"""
-    global logger, db, trader, scraper
+    global logger, db, trader, scraper, running
+    global bitcoin_strategy, bitcoin_ws_client
     
     parser = argparse.ArgumentParser(description='PM Bot - Polymarket Copy Trading')
     parser.add_argument('--dashboard-only', action='store_true', 
@@ -255,12 +276,21 @@ def main():
                        help='Run only trading without dashboard')
     parser.add_argument('--host', default=None, help='Dashboard host')
     parser.add_argument('--port', type=int, default=None, help='Dashboard port')
+    parser.add_argument('--strategy', type=str, default=None, 
+                       choices=['copy', 'bitcoin_arbitrage'],
+                       help='Trading strategy to use (default: copy)')
     args = parser.parse_args()
     
     # Setup logging
     logger = setup_logging()
     logger.info("=" * 50)
-    logger.info("PM Bot Starting...")
+    
+    # Strategy selection
+    if args.strategy == 'bitcoin_arbitrage':
+        logger.info("PM Bot Starting - Bitcoin Arbitrage Strategy")
+    else:
+        logger.info("PM Bot Starting - Copy Trading Strategy")
+    
     logger.info("=" * 50)
     
     # Validate config
@@ -276,7 +306,7 @@ def main():
     signal.signal(signal.SIGINT, signal_handler)
     signal.signal(signal.SIGTERM, signal_handler)
     
-    # Initialize components
+    # Initialize database
     logger.info("Initializing database...")
     db = DatabaseManager(config.DATABASE_PATH)
     
@@ -284,42 +314,101 @@ def main():
     init_bot_state()
     init_default_profile()
     
+    # Initialize trader (needed for most modes)
     if not args.dashboard_only:
         logger.info("Initializing trader...")
         trader = ClobTrader(db)
         
         if not trader.initialized:
             logger.warning("CLOB trader not initialized - check credentials")
-        
-        logger.info("Initializing scraper...")
-        scraper = PolymarketScraper(config.TARGET_USERNAME)
     
-    # Start components
+    # Initialize and run based on strategy
     threads = []
     
-    if not args.dashboard_only:
-        logger.info("Starting trade monitor...")
-        monitor_thread = Thread(target=process_new_trades, daemon=True)
-        monitor_thread.start()
-        threads.append(monitor_thread)
-    
-    if not args.trade_only and DASHBOARD_AVAILABLE:
-        logger.info("Starting dashboard...")
-        dashboard_thread = Thread(
-            target=run_dashboard,
-            args=(args.host, args.port, False),
-            daemon=True
-        )
-        dashboard_thread.start()
-        threads.append(dashboard_thread)
-        logger.info(f"Dashboard available at http://{config.DASHBOARD_HOST}:{config.DASHBOARD_PORT}")
-    
-    # Keep main thread alive
-    try:
-        while running:
-            time.sleep(1)
-    except KeyboardInterrupt:
-        logger.info("Keyboard interrupt received")
+    if args.strategy == 'bitcoin_arbitrage':
+        if not STRATEGIES_AVAILABLE:
+            logger.error("Bitcoin Arbitrage strategy not available - check dependencies")
+            sys.exit(1)
+        
+        logger.info("🚀 Starting Bitcoin Arbitrage Strategy...")
+        
+        # Create strategy and WebSocket client
+        bitcoin_strategy, bitcoin_ws_client = create_bitcoin_arbitrage_strategy(trader)
+        
+        # Start strategy processing
+        bitcoin_strategy.start()
+        
+        # Connect to Coinbase WebSocket
+        bitcoin_ws_client.start()
+        
+        logger.info(f"📡 Connected to Coinbase WebSocket")
+        logger.info(f"📊 Arbitrage threshold: {config.ARBITRAGE_THRESHOLD if hasattr(config, 'ARBITRAGE_THRESHOLD') else '0.1%'}")
+        
+        # Stats reporting thread
+        def report_stats():
+            while running:
+                time.sleep(60)  # Every minute
+                if bitcoin_strategy:
+                    stats = bitcoin_strategy.get_stats()
+                    logger.info(
+                        f"📈 Strategy Stats: {stats['signals_generated']} signals, "
+                        f"{stats['trades_executed']} trades, "
+                        f"PnL: {stats['total_pnl']:+.2%}"
+                    )
+        
+        stats_thread = Thread(target=report_stats, daemon=True)
+        stats_thread.start()
+        threads.append(stats_thread)
+        
+        # Keep main thread alive
+        try:
+            while running:
+                time.sleep(1)
+                
+                # Check WebSocket health
+                if bitcoin_ws_client and not bitcoin_ws_client.is_connected():
+                    logger.warning("WebSocket disconnected, attempting reconnect...")
+                    
+        except KeyboardInterrupt:
+            logger.info("Keyboard interrupt received")
+        
+        # Cleanup
+        logger.info("Shutting down Bitcoin Arbitrage Strategy...")
+        if bitcoin_ws_client:
+            bitcoin_ws_client.stop()
+        if bitcoin_strategy:
+            bitcoin_strategy.stop()
+            
+    else:
+        # Default: Copy Trading Strategy
+        if not args.dashboard_only:
+            logger.info(f"Initializing scraper for target: {config.TARGET_USERNAME}")
+            scraper = PolymarketScraper(config.TARGET_USERNAME)
+        
+        # Start components
+        if not args.dashboard_only:
+            logger.info("Starting trade monitor...")
+            monitor_thread = Thread(target=process_new_trades, daemon=True)
+            monitor_thread.start()
+            threads.append(monitor_thread)
+        
+        if not args.trade_only and DASHBOARD_AVAILABLE:
+            logger.info("Starting dashboard...")
+            dashboard_thread = Thread(
+                target=run_dashboard,
+                args=(args.host, args.port, False),
+                daemon=True
+            )
+            dashboard_thread.start()
+            threads.append(dashboard_thread)
+            logger.info(f"Dashboard available at http://{config.DASHBOARD_HOST}:{config.DASHBOARD_PORT}")
+        
+        # Keep main thread alive
+        try:
+            while running:
+                time.sleep(1)
+        except KeyboardInterrupt:
+            logger.info("Keyboard interrupt received")
     
     logger.info("Shutdown complete")
 
