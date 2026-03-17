@@ -67,22 +67,35 @@ class PolymarketScraper:
             # Try to find activity data in script tags (Next.js data)
             scripts = soup.find_all('script')
             for script in scripts:
-                if script.string and '__NEXT_DATA__' in script.string:
+                script_id = script.get('id', '')
+                script_type = script.get('type', '')
+                
+                # Check for __NEXT_DATA__ script (new format: type="application/json")
+                if script_id == '__NEXT_DATA__' or (script.string and '__NEXT_DATA__' in script.string):
                     try:
-                        # Try multiple patterns
-                        json_match = re.search(r'window\.__NEXT_DATA__\s*=\s*({.+?});', script.string, re.DOTALL)
-                        if not json_match:
-                            # Try without semicolon
-                            json_match = re.search(r'window\.__NEXT_DATA__\s*=\s*({.+})', script.string, re.DOTALL)
+                        json_text = None
                         
-                        if json_match:
-                            data = json.loads(json_match.group(1))
+                        # New format: <script id="__NEXT_DATA__" type="application/json">{...}</script>
+                        if script_type == 'application/json' and script.string:
+                            json_text = script.string.strip()
+                        
+                        # Old format: window.__NEXT_DATA__ = {...};
+                        elif script.string:
+                            json_match = re.search(r'window\.__NEXT_DATA__\s*=\s*({.+?});', script.string, re.DOTALL)
+                            if not json_match:
+                                json_match = re.search(r'window\.__NEXT_DATA__\s*=\s*({.+})', script.string, re.DOTALL)
+                            if json_match:
+                                json_text = json_match.group(1)
+                        
+                        if json_text:
+                            data = json.loads(json_text)
                             trades = self._parse_nextjs_data(data, limit)
                             if trades:
                                 logger.info(f"Parsed {len(trades)} trades from Next.js data")
                                 return trades
                         else:
-                            logger.warning("Found __NEXT_DATA__ but couldn't extract JSON")
+                            logger.warning("Found __NEXT_DATA__ script but couldn't extract JSON text")
+                            
                     except json.JSONDecodeError as e:
                         logger.warning(f"JSON decode error: {e}")
                     except Exception as e:
