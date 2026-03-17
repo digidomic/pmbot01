@@ -69,14 +69,26 @@ class PolymarketScraper:
             for script in scripts:
                 if script.string and '__NEXT_DATA__' in script.string:
                     try:
-                        json_match = re.search(r'window\.__NEXT_DATA__\s*=\s*({.+?});', script.string)
+                        # Try multiple patterns
+                        json_match = re.search(r'window\.__NEXT_DATA__\s*=\s*({.+?});', script.string, re.DOTALL)
+                        if not json_match:
+                            # Try without semicolon
+                            json_match = re.search(r'window\.__NEXT_DATA__\s*=\s*({.+})', script.string, re.DOTALL)
+                        
                         if json_match:
                             data = json.loads(json_match.group(1))
                             trades = self._parse_nextjs_data(data, limit)
                             if trades:
+                                logger.info(f"Parsed {len(trades)} trades from Next.js data")
                                 return trades
+                        else:
+                            logger.warning("Found __NEXT_DATA__ but couldn't extract JSON")
+                    except json.JSONDecodeError as e:
+                        logger.warning(f"JSON decode error: {e}")
                     except Exception as e:
                         logger.warning(f"Failed to parse Next.js data: {e}")
+            
+            logger.info("No Next.js data found, trying HTML fallback")
             
             # Fallback: Try to parse activity from HTML
             trades = self._parse_html_activity(soup, limit)
@@ -97,35 +109,52 @@ class PolymarketScraper:
             props = data.get('props', {})
             page_props = props.get('pageProps', {})
             
+            logger.debug(f"pageProps keys: {list(page_props.keys())}")
+            
             # Look for activity/trades in various locations
             activities = []
             
             # Try common locations for activity data
             if 'activities' in page_props:
                 activities = page_props['activities']
-            elif 'user' in page_props and 'activities' in page_props['user']:
+                logger.info(f"Found {len(activities)} activities in pageProps['activities']")
+            elif 'user' in page_props and isinstance(page_props['user'], dict) and 'activities' in page_props['user']:
                 activities = page_props['user']['activities']
+                logger.info(f"Found {len(activities)} activities in pageProps['user']['activities']")
             elif 'dehydratedState' in page_props:
                 # React Query dehydrated state
                 queries = page_props['dehydratedState'].get('queries', [])
+                logger.debug(f"Searching {len(queries)} queries in dehydratedState")
                 for query in queries:
                     query_data = query.get('state', {}).get('data', {})
                     if isinstance(query_data, dict) and 'activities' in query_data:
                         activities = query_data['activities']
+                        logger.info(f"Found {len(activities)} activities in dehydratedState query")
                         break
                     elif isinstance(query_data, list):
                         for item in query_data:
                             if isinstance(item, dict) and 'activities' in item:
                                 activities = item['activities']
+                                logger.info(f"Found {len(activities)} activities in dehydratedState list item")
                                 break
             
+            if not activities:
+                logger.warning("No activities found in Next.js data structure")
+                # Debug: Show available keys
+                logger.debug(f"Available keys in pageProps: {list(page_props.keys())}")
+                return trades
+            
+            logger.info(f"Parsing {len(activities[:limit])} activities")
             for activity in activities[:limit]:
                 trade = self._parse_activity_item(activity)
                 if trade:
                     trades.append(trade)
+                    logger.debug(f"Parsed trade: {trade.side} {trade.outcome} - {trade.amount} USDC")
+            
+            logger.info(f"Successfully parsed {len(trades)} trades from Next.js data")
                     
         except Exception as e:
-            logger.error(f"Error parsing Next.js data: {e}")
+            logger.error(f"Error parsing Next.js data: {e}", exc_info=True)
         
         return trades
     
