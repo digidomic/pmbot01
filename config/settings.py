@@ -27,6 +27,8 @@ class Config:
     MAX_TRADE_AMOUNT_USDC: float = float(os.getenv('MAX_TRADE_AMOUNT_USDC', '50'))
     TRADE_PERCENTAGE: float = float(os.getenv('TRADE_PERCENTAGE', '10'))
     MAX_TRADES_TO_TRACK: int = int(os.getenv('MAX_TRADES_TO_TRACK', '20'))
+    DAILY_SPENDING_LIMIT_USDC: float = float(os.getenv('DAILY_SPENDING_LIMIT_USDC', '250'))
+    DRY_RUN: bool = os.getenv('DRY_RUN', 'true').lower() in ('true', '1', 'yes', 'on')
     
     # Dashboard
     DASHBOARD_HOST: str = os.getenv('DASHBOARD_HOST', '0.0.0.0')
