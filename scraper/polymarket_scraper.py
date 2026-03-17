@@ -35,6 +35,7 @@ class PolymarketScraper:
     """Scraper for Polymarket user activity"""
     
     BASE_URL = "https://polymarket.com"
+    API_URL = "https://clob.polymarket.com"  # CLOB API
     
     def __init__(self, target_username: str = "0x8dxd"):
         self.target_username = target_username
@@ -46,8 +47,176 @@ class PolymarketScraper:
     
     def fetch_activity(self, limit: int = 20) -> list[RawTrade]:
         """
-        Fetch recent trades from user's activity page
+        Fetch recent trades from user's activity
+        First tries CLOB API, falls back to scraping
+        """
+        # Try CLOB API first (more reliable)
+        trades = self._fetch_from_api(limit)
+        if trades:
+            logger.info(f"Fetched {len(trades)} trades from CLOB API")
+            return trades
         
+        # Fallback to scraping
+        logger.info("CLOB API returned no trades, trying web scraping")
+        return self._fetch_from_web(limit)
+    
+    def _fetch_from_api(self, limit: int = 20) -> list[RawTrade]:
+        """Fetch activity from CLOB API"""
+        trades = []
+        
+        try:
+            # Map username to wallet address if needed
+            # For now, assume target_username might be a wallet address
+            user_id = self.target_username
+            
+            # If username starts with @, remove it
+            if user_id.startswith('@'):
+                user_id = user_id[1:]
+            
+            # If it's not a valid wallet (0x...), we'd need to resolve it
+            # For now, assume the user provides the wallet address
+            if not user_id.startswith('0x'):
+                logger.warning(f"Username {user_id} is not a wallet address. API requires wallet address.")
+                return trades
+            
+            url = f"{self.API_URL}/activity/user/{user_id}"
+            logger.info(f"Fetching from CLOB API: {url}")
+            
+            response = self.session.get(url, timeout=30)
+            response.raise_for_status()
+            
+            data = response.json()
+            activities = data.get('activities', [])
+            
+            logger.info(f"API returned {len(activities)} activities")
+            
+            for activity in activities[:limit]:
+                trade = self._parse_api_activity(activity)
+                if trade:
+                    trades.append(trade)
+                    
+        except requests.RequestException as e:
+            logger.warning(f"CLOB API request failed: {e}")
+        except Exception as e:
+            logger.error(f"Error parsing API response: {e}")
+        
+        return trades
+    
+    def _parse_api_activity(self, activity: dict) -> Optional[RawTrade]:
+        """Parse activity from CLOB API format"""
+        try:
+            # Only process trade activities
+            if activity.get('type') != 'trade':
+                return None
+            
+            trade_id = activity.get('transactionHash', '') or f"api_{activity.get('timestamp', '')}"
+            
+            # Extract market info
+            market = activity.get('market', {})
+            market_slug = market.get('slug', '')
+            market_question = market.get('question', '')
+            
+            # Trade details
+            side = activity.get('side', 'BUY').upper()
+            outcome = activity.get('outcome', 'YES').upper()
+            
+            # Amount - API returns as string
+            amount_str = activity.get('amount', '0')
+            amount = float(amount_str) if amount_str else 0.0
+            
+            # Price
+            price = float(activity.get('price', 0))
+            
+            # Timestamp
+            timestamp_str = activity.get('timestamp', '')
+            timestamp = self._parse_timestamp(timestamp_str)
+            
+            # Transaction hash
+            tx_hash = activity.get('transactionHash')
+            
+            return RawTrade(
+                trade_id=trade_id,
+                market_slug=market_slug,
+                market_question=market_question,
+                side=side,
+                outcome=outcome,
+                amount=amount,
+                price=price,
+                timestamp=timestamp,
+                tx_hash=tx_hash
+            )
+            
+        except Exception as e:
+            logger.warning(f"Failed to parse API activity: {e}")
+            return None
+    
+    def _fetch_from_web(self, limit: int = 20) -> list[RawTrade]:
+        """
+        Fetch recent trades from user's activity page (fallback method)
+        Note: This uses the public profile page. In production, 
+        consider using the CLOB API for more reliable data.
+        """
+        trades = []
+        
+        try:
+            logger.info(f"Fetching activity for {self.target_username}")
+            response = self.session.get(
+                f"{self.target_url}?tab=activity",
+                timeout=30
+            )
+            response.raise_for_status()
+            
+            # Parse the HTML
+            soup = BeautifulSoup(response.text, 'html.parser')
+            
+            # Try to find activity data in script tags (Next.js data)
+            scripts = soup.find_all('script')
+            for script in scripts:
+                script_id = script.get('id', '')
+                script_type = script.get('type', '')
+                
+                # Check for __NEXT_DATA__ script (new format: type="application/json")
+                if script_id == '__NEXT_DATA__' or (script.string and '__NEXT_DATA__' in script.string):
+                    try:
+                        json_text = None
+                        
+                        # New format: <script id="__NEXT_DATA__" type="application/json">{...}</script>
+                        if script_type == 'application/json' and script.string:
+                            json_text = script.string.strip()
+                        
+                        # Old format: window.__NEXT_DATA__ = {...};
+                        elif script.string:
+                            json_match = re.search(r'window\.__NEXT_DATA__\s*=\s*({.+?});', script.string, re.DOTALL)
+                            if not json_match:
+                                json_match = re.search(r'window\.__NEXT_DATA__\s*=\s*({.+})', script.string, re.DOTALL)
+                            if json_match:
+                                json_text = json_match.group(1)
+                        
+                        if json_text:
+                            data = json.loads(json_text)
+                            trades = self._parse_nextjs_data(data, limit)
+                            if trades:
+                                logger.info(f"Parsed {len(trades)} trades from Next.js data")
+                                return trades
+                        else:
+                            logger.warning("Found __NEXT_DATA__ script but couldn't extract JSON text")
+                            
+                    except json.JSONDecodeError as e:
+                        logger.warning(f"JSON decode error: {e}")
+                    except Exception as e:
+                        logger.warning(f"Failed to parse Next.js data: {e}")
+            
+            logger.info("No Next.js data found, trying HTML fallback")
+            
+            # Fallback: Try to parse activity from HTML
+            trades = self._parse_html_activity(soup, limit)
+            
+        except requests.RequestException as e:
+            logger.error(f"Request failed: {e}")
+        except Exception as e:
+            logger.error(f"Unexpected error: {e}")
+        
+        return trades
         Note: This uses the public profile page. In production, 
         consider using the CLOB API for more reliable data.
         """
