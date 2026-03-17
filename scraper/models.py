@@ -201,3 +201,25 @@ class TargetProfile(Base):
             'is_active': self.is_active,
             'added_at': self.added_at.isoformat() if self.added_at else None,
         }
+
+
+class Setting(Base):
+    """
+    Persistente Einstellungen für den Bot
+    """
+    __tablename__ = 'settings'
+    
+    id = Column(Integer, primary_key=True)
+    key = Column(String(100), unique=True, nullable=False)
+    value = Column(String(500), nullable=True)
+    updated_at = Column(DateTime, server_default=func.now(), onupdate=func.now())
+    
+    def __repr__(self):
+        return f"<Setting(key={self.key}, value={self.value})>"
+    
+    def to_dict(self) -> dict:
+        return {
+            'key': self.key,
+            'value': self.value,
+            'updated_at': self.updated_at.isoformat() if self.updated_at else None,
+        }

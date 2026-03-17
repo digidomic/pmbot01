@@ -10,7 +10,7 @@ from flask_socketio import SocketIO, emit
 
 from config import config
 from database.db import DatabaseManager
-from scraper.models import Trade, BotState, TargetProfile
+from scraper.models import Trade, BotState, TargetProfile, Setting
 
 logger = logging.getLogger(__name__)
 
@@ -20,6 +20,32 @@ socketio = SocketIO(app, cors_allowed_origins="*")
 
 # Global database instance
 db = DatabaseManager(config.DATABASE_PATH)
+
+
+def get_setting_from_db(key, default_value=None):
+    """Get setting from database"""
+    try:
+        with db.get_session() as session:
+            setting = session.query(Setting).filter_by(key=key).first()
+            if setting and setting.value is not None:
+                return setting.value
+    except Exception as e:
+        logger.warning(f"Failed to load setting {key}: {e}")
+    return default_value
+
+
+def save_setting_to_db(key, value):
+    """Save setting to database"""
+    try:
+        with db.get_session() as session:
+            setting = session.query(Setting).filter_by(key=key).first()
+            if not setting:
+                setting = Setting(key=key)
+            setting.value = str(value)
+            session.add(setting)
+            session.commit()
+    except Exception as e:
+        logger.error(f"Failed to save setting {key}: {e}")
 
 
 @app.route('/')
@@ -46,31 +72,41 @@ def get_trades():
 
 @app.route('/api/config')
 def get_config():
-    """Get current configuration (safe values only)"""
+    """Get current configuration (from DB or env)"""
+    # Load from DB first, fallback to env
+    max_amount = get_setting_from_db('max_trade_amount', config.MAX_TRADE_AMOUNT_USDC)
+    percentage = get_setting_from_db('trade_percentage', config.TRADE_PERCENTAGE)
+    max_trades = get_setting_from_db('max_trades_to_track', config.MAX_TRADES_TO_TRACK)
+    poll_interval = get_setting_from_db('poll_interval', config.POLL_INTERVAL)
+    
     return jsonify({
         'target_username': config.TARGET_USERNAME,
         'target_url': config.TARGET_USER_URL,
-        'max_trade_amount': config.MAX_TRADE_AMOUNT_USDC,
-        'trade_percentage': config.TRADE_PERCENTAGE,
-        'max_trades_to_track': config.MAX_TRADES_TO_TRACK,
-        'poll_interval': config.POLL_INTERVAL,
+        'max_trade_amount': float(max_amount) if max_amount else config.MAX_TRADE_AMOUNT_USDC,
+        'trade_percentage': float(percentage) if percentage else config.TRADE_PERCENTAGE,
+        'max_trades_to_track': int(max_trades) if max_trades else config.MAX_TRADES_TO_TRACK,
+        'poll_interval': int(poll_interval) if poll_interval else config.POLL_INTERVAL,
         'log_level': config.LOG_LEVEL
     })
 
 
 @app.route('/api/config', methods=['POST'])
 def update_config():
-    """Update configuration"""
+    """Update configuration (persist to DB)"""
     data = request.json
     
     if 'max_trade_amount' in data:
         config.MAX_TRADE_AMOUNT_USDC = float(data['max_trade_amount'])
+        save_setting_to_db('max_trade_amount', data['max_trade_amount'])
     if 'trade_percentage' in data:
         config.TRADE_PERCENTAGE = float(data['trade_percentage'])
+        save_setting_to_db('trade_percentage', data['trade_percentage'])
     if 'max_trades_to_track' in data:
         config.MAX_TRADES_TO_TRACK = int(data['max_trades_to_track'])
+        save_setting_to_db('max_trades_to_track', data['max_trades_to_track'])
     if 'poll_interval' in data:
         config.POLL_INTERVAL = int(data['poll_interval'])
+        save_setting_to_db('poll_interval', data['poll_interval'])
     
     emit_config_update()
     return jsonify({'success': True})
