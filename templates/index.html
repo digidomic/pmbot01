@@ -51,14 +51,23 @@
                     </div>
                 </div>
                 <div class="flex items-center space-x-4">
-                    <!-- Status Indicator -->
+                    <!-- Profile Selector -->
                     <div class="flex items-center space-x-2 bg-pm-dark px-3 py-2 rounded-lg border border-pm-border">
-                        <span class="text-sm text-pm-muted">Status:</span>
-                        <span id="bot-status" class="status-badge status-running">
-                            <span class="status-dot"></span>
-                            Running
-                        </span>
+                        <i class="fas fa-user text-pm-muted text-sm"></i>
+                        <select id="profile-select" class="bg-transparent text-sm text-pm-text border-none outline-none cursor-pointer">
+                            <option value="">Select Profile...</option>
+                        </select>
+                        <button id="btn-add-profile" class="text-pm-green hover:text-pm-green/80 transition-colors" title="Add Profile">
+                            <i class="fas fa-plus text-sm"></i>
+                        </button>
                     </div>
+                    
+                    <!-- Play/Pause Button -->
+                    <button id="btn-play-pause" class="flex items-center space-x-2 px-4 py-2 rounded-lg font-semibold transition-all duration-200 bg-pm-red hover:bg-pm-red/80 text-white">
+                        <i class="fas fa-pause" id="play-pause-icon"></i>
+                        <span id="play-pause-text">Paused</span>
+                    </button>
+                    
                     <!-- Connection Status -->
                     <div id="connection-status" class="flex items-center space-x-2 text-pm-green">
                         <i class="fas fa-wifi text-sm"></i>
@@ -249,6 +258,40 @@
 
     <!-- Toast Notifications -->
     <div id="toast-container" class="toast-container"></div>
+
+    <!-- Add Profile Modal -->
+    <div id="profile-modal" class="modal hidden">
+        <div class="modal-overlay"></div>
+        <div class="modal-content">
+            <div class="modal-header">
+                <h3 class="text-lg font-semibold">
+                    <i class="fas fa-user-plus mr-2 text-pm-green"></i>
+                    Add Target Profile
+                </h3>
+                <button id="btn-close-modal" class="text-pm-muted hover:text-pm-text">
+                    <i class="fas fa-times"></i>
+                </button>
+            </div>
+            <form id="profile-form" class="space-y-4 mt-4">
+                <div class="form-group">
+                    <label class="form-label">Username</label>
+                    <input type="text" id="profile-username" class="form-input" placeholder="e.g., 0x8dxd" required>
+                    <p class="text-xs text-pm-muted mt-1">Polymarket username (without @)</p>
+                </div>
+                <div class="form-group">
+                    <label class="form-label">Profile URL (optional)</label>
+                    <input type="url" id="profile-url" class="form-input" placeholder="https://polymarket.com/profile/@username">
+                    <p class="text-xs text-pm-muted mt-1">Will be auto-generated if empty</p>
+                </div>
+                <div class="flex space-x-2 pt-4">
+                    <button type="button" id="btn-cancel-profile" class="btn btn-secondary flex-1">Cancel</button>
+                    <button type="submit" class="btn btn-primary flex-1">
+                        <i class="fas fa-plus mr-2"></i>Add Profile
+                    </button>
+                </div>
+            </form>
+        </div>
+    </div>
 
     <!-- Scripts -->
     <script src="/static/js/dashboard.js"></script>
