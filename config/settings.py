@@ -51,12 +51,19 @@ class Config:
             errors.append("POLYMARKET_SECRET not configured")
         if not self.POLYMARKET_PASSPHRASE or self.POLYMARKET_PASSPHRASE == 'your_passphrase_here':
             errors.append("POLYMARKET_PASSPHRASE not configured")
-            
+
+        if not self.TARGET_USERNAME or self.TARGET_USERNAME in ['0x', 'unknown']:
+            errors.append("TARGET_USERNAME must be a valid Polymarket username")
+
         if self.MAX_TRADE_AMOUNT_USDC <= 0:
             errors.append("MAX_TRADE_AMOUNT_USDC must be positive")
         if not (0 < self.TRADE_PERCENTAGE <= 100):
             errors.append("TRADE_PERCENTAGE must be between 0 and 100")
-            
+
+        # Check database path
+        if not self.DATABASE_PATH:
+            errors.append("DATABASE_PATH is not set")
+
         return errors
 
 

@@ -1,0 +1,256 @@
+<!DOCTYPE html>
+<html lang="de">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>PM Bot Dashboard</title>
+    <!-- Tailwind CSS -->
+    <script src="https://cdn.tailwindcss.com"></script>
+    <!-- Chart.js -->
+    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+    <!-- Socket.IO -->
+    <script src="https://cdn.socket.io/4.7.2/socket.io.min.js"></script>
+    <!-- Font Awesome -->
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.2/css/all.min.css">
+    <!-- Custom Styles -->
+    <link rel="stylesheet" href="/static/css/style.css">
+    <script>
+        tailwind.config = {
+            theme: {
+                extend: {
+                    colors: {
+                        pm: {
+                            dark: '#0a0a0a',
+                            card: '#141414',
+                            border: '#2a2a2a',
+                            green: '#00d084',
+                            red: '#ff4757',
+                            blue: '#2e86de',
+                            yellow: '#ffa502',
+                            text: '#ffffff',
+                            muted: '#888888'
+                        }
+                    }
+                }
+            }
+        }
+    </script>
+</head>
+<body class="bg-pm-dark text-pm-text min-h-screen">
+    <!-- Header -->
+    <header class="bg-pm-card border-b border-pm-border sticky top-0 z-50">
+        <div class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-4">
+            <div class="flex items-center justify-between">
+                <div class="flex items-center space-x-3">
+                    <div class="w-10 h-10 bg-gradient-to-br from-pm-green to-pm-blue rounded-lg flex items-center justify-center">
+                        <i class="fas fa-robot text-white text-lg"></i>
+                    </div>
+                    <div>
+                        <h1 class="text-xl font-bold">PM Bot Dashboard</h1>
+                        <p class="text-xs text-pm-muted">Copy Trading Bot</p>
+                    </div>
+                </div>
+                <div class="flex items-center space-x-4">
+                    <!-- Status Indicator -->
+                    <div class="flex items-center space-x-2 bg-pm-dark px-3 py-2 rounded-lg border border-pm-border">
+                        <span class="text-sm text-pm-muted">Status:</span>
+                        <span id="bot-status" class="status-badge status-running">
+                            <span class="status-dot"></span>
+                            Running
+                        </span>
+                    </div>
+                    <!-- Connection Status -->
+                    <div id="connection-status" class="flex items-center space-x-2 text-pm-green">
+                        <i class="fas fa-wifi text-sm"></i>
+                        <span class="text-sm">Connected</span>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </header>
+
+    <!-- Main Content -->
+    <main class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-6">
+        <!-- Stats Cards -->
+        <div class="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-6 gap-4 mb-6">
+            <div class="stat-card">
+                <div class="stat-icon text-pm-blue">
+                    <i class="fas fa-exchange-alt"></i>
+                </div>
+                <div class="stat-value" id="stat-total-trades">0</div>
+                <div class="stat-label">Total Trades</div>
+            </div>
+            <div class="stat-card">
+                <div class="stat-icon text-pm-green">
+                    <i class="fas fa-check-circle"></i>
+                </div>
+                <div class="stat-value" id="stat-executed">0</div>
+                <div class="stat-label">Executed</div>
+            </div>
+            <div class="stat-card">
+                <div class="stat-icon text-pm-red">
+                    <i class="fas fa-times-circle"></i>
+                </div>
+                <div class="stat-value" id="stat-failed">0</div>
+                <div class="stat-label">Failed</div>
+            </div>
+            <div class="stat-card">
+                <div class="stat-icon text-pm-yellow">
+                    <i class="fas fa-chart-line"></i>
+                </div>
+                <div class="stat-value" id="stat-volume">$0</div>
+                <div class="stat-label">Volume</div>
+            </div>
+            <div class="stat-card">
+                <div class="stat-icon text-pm-blue">
+                    <i class="fas fa-clock"></i>
+                </div>
+                <div class="stat-value" id="stat-latency">0ms</div>
+                <div class="stat-label">Avg Latency</div>
+            </div>
+            <div class="stat-card">
+                <div class="stat-icon text-pm-green">
+                    <i class="fas fa-dollar-sign"></i>
+                </div>
+                <div class="stat-value" id="stat-pnl">+$0</div>
+                <div class="stat-label">PnL</div>
+            </div>
+        </div>
+
+        <div class="grid grid-cols-1 lg:grid-cols-3 gap-6">
+            <!-- Settings Panel -->
+            <div class="lg:col-span-1">
+                <div class="dashboard-card">
+                    <div class="card-header">
+                        <i class="fas fa-cog text-pm-blue"></i>
+                        <h2>Settings</h2>
+                    </div>
+                    <form id="settings-form" class="space-y-4">
+                        <div class="form-group">
+                            <label class="form-label">Max Trade Amount (USDC)</label>
+                            <input type="number" id="setting-max-amount" class="form-input" placeholder="1000" min="1" step="0.01">
+                        </div>
+                        <div class="form-group">
+                            <label class="form-label">Trade Percentage (%)</label>
+                            <input type="number" id="setting-percentage" class="form-input" placeholder="10" min="1" max="100" step="1">
+                        </div>
+                        <div class="form-group">
+                            <label class="form-label">Max Trades / Hour</label>
+                            <input type="number" id="setting-max-trades" class="form-input" placeholder="10" min="1" step="1">
+                        </div>
+                        <div class="form-group">
+                            <label class="form-label">Poll Interval (seconds)</label>
+                            <input type="number" id="setting-poll-interval" class="form-input" placeholder="5" min="1" step="1">
+                        </div>
+                        <div class="form-group">
+                            <label class="form-label">Target Wallet</label>
+                            <input type="text" id="setting-target-wallet" class="form-input" placeholder="0x..." readonly>
+                        </div>
+                        <div class="flex space-x-2 pt-2">
+                            <button type="submit" class="btn btn-primary flex-1">
+                                <i class="fas fa-save mr-2"></i>Save
+                            </button>
+                            <button type="button" id="btn-reset" class="btn btn-secondary">
+                                <i class="fas fa-undo"></i>
+                            </button>
+                        </div>
+                    </form>
+                </div>
+
+                <!-- Charts -->
+                <div class="dashboard-card mt-6">
+                    <div class="card-header">
+                        <i class="fas fa-chart-pie text-pm-green"></i>
+                        <h2>Performance</h2>
+                    </div>
+                    <div class="chart-container">
+                        <canvas id="pnlChart"></canvas>
+                    </div>
+                </div>
+
+                <div class="dashboard-card mt-6">
+                    <div class="card-header">
+                        <i class="fas fa-chart-bar text-pm-yellow"></i>
+                        <h2>Trade Volume</h2>
+                    </div>
+                    <div class="chart-container">
+                        <canvas id="volumeChart"></canvas>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Trade History -->
+            <div class="lg:col-span-2">
+                <div class="dashboard-card">
+                    <div class="card-header">
+                        <i class="fas fa-history text-pm-blue"></i>
+                        <h2>Live Trade History</h2>
+                        <span class="badge badge-blue ml-auto" id="trade-count">0 trades</span>
+                    </div>
+                    <div class="table-container">
+                        <table class="trade-table">
+                            <thead>
+                                <tr>
+                                    <th>Time</th>
+                                    <th>Market</th>
+                                    <th>Side</th>
+                                    <th>Size</th>
+                                    <th>Price</th>
+                                    <th>Latency</th>
+                                    <th>Status</th>
+                                </tr>
+                            </thead>
+                            <tbody id="trade-table-body">
+                                <!-- Trades werden hier dynamisch eingefügt -->
+                            </tbody>
+                        </table>
+                    </div>
+                    <div id="empty-state" class="empty-state">
+                        <i class="fas fa-inbox text-4xl text-pm-muted mb-3"></i>
+                        <p>No trades yet</p>
+                        <p class="text-sm text-pm-muted">Waiting for target wallet activity...</p>
+                    </div>
+                </div>
+
+                <!-- Latency Monitor -->
+                <div class="dashboard-card mt-6">
+                    <div class="card-header">
+                        <i class="fas fa-tachometer-alt text-pm-green"></i>
+                        <h2>Latency Monitor</h2>
+                    </div>
+                    <div class="latency-legend">
+                        <div class="latency-item">
+                            <span class="latency-dot latency-good"></span>
+                            <span>&lt; 2s (Excellent)</span>
+                        </div>
+                        <div class="latency-item">
+                            <span class="latency-dot latency-warning"></span>
+                            <span>2-10s (Good)</span>
+                        </div>
+                        <div class="latency-item">
+                            <span class="latency-dot latency-bad"></span>
+                            <span>&gt; 10s (Slow)</span>
+                        </div>
+                    </div>
+                    <div class="chart-container" style="height: 150px;">
+                        <canvas id="latencyChart"></canvas>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </main>
+
+    <!-- Footer -->
+    <footer class="border-t border-pm-border mt-8 py-4">
+        <div class="max-w-7xl mx-auto px-4 text-center text-sm text-pm-muted">
+            <p>PM Bot Dashboard &copy; 2025 | Last update: <span id="last-update">-</span></p>
+        </div>
+    </footer>
+
+    <!-- Toast Notifications -->
+    <div id="toast-container" class="toast-container"></div>
+
+    <!-- Scripts -->
+    <script src="/static/js/dashboard.js"></script>
+</body>
+</html>
