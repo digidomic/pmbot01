@@ -59,6 +59,33 @@ pmbot01/
 5. **Access Dashboard**:
    Open http://localhost:8080 in your browser
 
+## 🐳 Docker Deployment
+
+For easier deployment, use Docker Compose:
+
+1. **Configure Credentials**:
+   ```bash
+   cp .env.example .env
+   # Edit .env with your credentials
+   ```
+
+2. **Start with Docker Compose**:
+   ```bash
+   docker-compose up -d
+   ```
+
+3. **View Logs**:
+   ```bash
+   docker-compose logs -f
+   ```
+
+4. **Stop**:
+   ```bash
+   docker-compose down
+   ```
+
+The dashboard will be available on port 8080.
+
 ## 🔧 Configuration
 
 ### Environment Variables (.env)
@@ -158,6 +185,39 @@ Trading on Polymarket involves significant financial risk. This bot copies trade
 ## 📝 License
 
 MIT License - see LICENSE file for details
+
+## 🌐 Network Access
+
+By default, the dashboard binds to `0.0.0.0` which makes it accessible from any device on your network:
+
+- **Local access**: http://localhost:8080
+- **Network access**: http://YOUR_IP:8080 (e.g., http://192.168.1.100:8080)
+
+### Security Warning ⚠️
+
+- `0.0.0.0` binds to **ALL network interfaces** - any device on your network can access the dashboard
+- Only use this in a **trusted network** (home LAN, secure office network)
+- **Do NOT expose directly to the internet** without additional protection
+
+### For Production Use
+
+If you need external access, use a **reverse proxy** with authentication:
+- **nginx** with basic auth or OAuth
+- **Traefik** with middleware auth
+- **Cloudflare Tunnel** for secure remote access
+
+### Firewall / Port Forwarding
+
+If accessing from another device doesn't work:
+1. **Check firewall**: Allow port 8080/tcp on your host
+   ```bash
+   # Ubuntu/Debian with ufw
+   sudo ufw allow 8080/tcp
+   
+   # Or with iptables
+   sudo iptables -A INPUT -p tcp --dport 8080 -j ACCEPT
+   ```
+2. **Router port forwarding**: Forward external port 8080 to your machine's internal IP (only if needed)
 
 ## 🆘 Troubleshooting
 

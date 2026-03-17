@@ -1,0 +1,14 @@
+version: '3.8'
+
+services:
+  pmbot:
+    build: .
+    container_name: pmbot01
+    ports:
+      - "8080:8080"
+    volumes:
+      - ./database:/app/database
+      - ./.env:/app/.env
+    restart: unless-stopped
+    environment:
+      - PYTHONUNBUFFERED=1
