@@ -309,7 +309,7 @@ async function apiCall(endpoint, options = {}) {
 
 async function loadSettings() {
     try {
-        const data = await apiCall('/settings');
+        const data = await apiCall('/config');
         settings = data;
         populateSettingsForm();
     } catch (error) {
@@ -340,7 +340,7 @@ async function loadTrades() {
 
 async function saveSettings(newSettings) {
     try {
-        const data = await apiCall('/settings', {
+        const data = await apiCall('/config', {
             method: 'POST',
             body: JSON.stringify(newSettings)
         });
