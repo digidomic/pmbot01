@@ -16,7 +16,8 @@ from threading import Thread
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 from config import config
-from database.db import TradeDatabase, Trade
+from database.db import DatabaseManager
+from scraper.models import Trade, BotState, TargetProfile
 from scraper.polymarket_scraper import PolymarketScraper
 from trader.clob_trader import ClobTrader
 
@@ -29,7 +30,7 @@ except ImportError:
 
 # Global state
 running = True
-db: TradeDatabase = None
+db: DatabaseManager = None
 trader: ClobTrader = None
 scraper: PolymarketScraper = None
 
@@ -59,14 +60,56 @@ def signal_handler(signum, frame):
     running = False
 
 
+def is_bot_running() -> bool:
+    """Check if bot is in running state"""
+    try:
+        with db.get_session() as session:
+            state = session.query(BotState).first()
+            if not state:
+                # Default to paused if no state exists
+                state = BotState(state='paused')
+                session.add(state)
+                session.commit()
+                return False
+            return state.state == 'running'
+    except Exception as e:
+        logger.error(f"Failed to check bot state: {e}")
+        return False  # Default to paused on error
+
+
+def get_active_profile():
+    """Get currently active target profile"""
+    try:
+        with db.get_session() as session:
+            profile = session.query(TargetProfile).filter_by(is_active=True).first()
+            return profile
+    except Exception as e:
+        logger.error(f"Failed to get active profile: {e}")
+        return None
+
+
 def process_new_trades():
     """Main loop: Check for new trades and execute copies"""
-    global running
+    global running, scraper
     
     logger.info(f"Starting trade monitoring for target: {config.TARGET_USERNAME}")
     
     while running:
         try:
+            # Check bot state - skip trading if paused
+            if not is_bot_running():
+                logger.debug("Bot is paused, skipping trade execution")
+                time.sleep(config.POLL_INTERVAL)
+                continue
+            
+            # Check if we need to update scraper (profile changed)
+            active_profile = get_active_profile()
+            if active_profile and active_profile.username != config.TARGET_USERNAME:
+                logger.info(f"Switching to profile: {active_profile.username}")
+                config.TARGET_USERNAME = active_profile.username
+                config.TARGET_USER_URL = active_profile.profile_url
+                scraper = PolymarketScraper(config.TARGET_USERNAME)
+            
             # Fetch recent activity from target user
             logger.debug("Fetching target user activity...")
             raw_trades = scraper.fetch_activity(limit=config.MAX_TRADES_TO_TRACK)
@@ -79,67 +122,76 @@ def process_new_trades():
             logger.info(f"Found {len(raw_trades)} trades")
             
             for raw_trade in raw_trades:
+                # Check bot state again before each trade
+                if not is_bot_running():
+                    logger.info("Bot paused during trade processing")
+                    break
+                
                 # Check if we already processed this trade
-                existing = db.get_trade(raw_trade.trade_id)
-                
-                if existing:
-                    logger.debug(f"Trade already processed: {raw_trade.trade_id}")
-                    continue
-                
-                logger.info(f"New trade detected: {raw_trade.side} {raw_trade.outcome} "
-                          f"on '{raw_trade.market_question[:50]}...' "
-                          f"({raw_trade.amount} USDC)")
-                
-                # Save target trade
-                target_trade = Trade(
-                    trade_id=raw_trade.trade_id,
-                    market_slug=raw_trade.market_slug,
-                    market_question=raw_trade.market_question,
-                    side=raw_trade.side,
-                    outcome=raw_trade.outcome,
-                    original_amount=raw_trade.amount,
-                    price=raw_trade.price,
-                    timestamp=raw_trade.timestamp,
-                    original_timestamp=raw_trade.timestamp,
-                    status='detected',
-                    is_target_trade=True
-                )
-                db.save_trade(target_trade)
-                
-                # Emit to dashboard
-                if DASHBOARD_AVAILABLE:
-                    try:
-                        emit_trade_update(target_trade)
-                    except Exception as e:
-                        logger.warning(f"Failed to emit trade update: {e}")
-                
-                # Execute copy trade
-                copy_trade = Trade(
-                    trade_id=f"copy_{raw_trade.trade_id}",
-                    market_slug=raw_trade.market_slug,
-                    market_question=raw_trade.market_question,
-                    side=raw_trade.side,
-                    outcome=raw_trade.outcome,
-                    original_amount=raw_trade.amount,
-                    price=raw_trade.price,
-                    timestamp=datetime.now(),
-                    original_timestamp=raw_trade.timestamp,
-                    is_target_trade=False
-                )
-                
-                success, error = trader.execute_trade(copy_trade)
-                
-                if success:
-                    logger.info(f"Trade copied successfully: {copy_trade.trade_id}")
-                else:
-                    logger.error(f"Failed to copy trade: {error}")
-                
-                # Emit stats update
-                if DASHBOARD_AVAILABLE:
-                    try:
-                        emit_stats_update()
-                    except Exception as e:
-                        logger.warning(f"Failed to emit stats update: {e}")
+                with db.get_session() as session:
+                    existing = session.query(Trade).filter_by(source_trade_id=raw_trade.trade_id).first()
+                    
+                    if existing:
+                        logger.debug(f"Trade already processed: {raw_trade.trade_id}")
+                        continue
+                    
+                    logger.info(f"New trade detected: {raw_trade.side} {raw_trade.outcome} "
+                              f"on '{raw_trade.market_question[:50]}...' "
+                              f"({raw_trade.amount} USDC)")
+                    
+                    # Save target trade
+                    target_trade = Trade(
+                        source_trade_id=raw_trade.trade_id,
+                        trader_address=config.TARGET_USERNAME,
+                        market_slug=raw_trade.market_slug,
+                        market_name=raw_trade.market_question,
+                        outcome=raw_trade.outcome,
+                        side=raw_trade.side,
+                        amount_usdc=raw_trade.amount,
+                        price=raw_trade.price,
+                        timestamp=raw_trade.timestamp,
+                        tx_hash=raw_trade.tx_hash,
+                        copied=False,
+                        is_target_trade=True
+                    )
+                    session.add(target_trade)
+                    session.commit()
+                    
+                    # Emit to dashboard
+                    if DASHBOARD_AVAILABLE:
+                        try:
+                            emit_trade_update(target_trade)
+                        except Exception as e:
+                            logger.warning(f"Failed to emit trade update: {e}")
+                    
+                    # Execute copy trade
+                    copy_trade = Trade(
+                        source_trade_id=f"copy_{raw_trade.trade_id}",
+                        trader_address=config.TARGET_USERNAME,
+                        market_slug=raw_trade.market_slug,
+                        market_name=raw_trade.market_question,
+                        outcome=raw_trade.outcome,
+                        side=raw_trade.side,
+                        amount_usdc=raw_trade.amount,
+                        price=raw_trade.price,
+                        timestamp=datetime.now(),
+                        copied=False,
+                        is_target_trade=False
+                    )
+                    
+                    success, error = trader.execute_trade(copy_trade)
+                    
+                    if success:
+                        logger.info(f"Trade copied successfully: {copy_trade.source_trade_id}")
+                    else:
+                        logger.error(f"Failed to copy trade: {error}")
+                    
+                    # Emit stats update
+                    if DASHBOARD_AVAILABLE:
+                        try:
+                            emit_stats_update()
+                        except Exception as e:
+                            logger.warning(f"Failed to emit stats update: {e}")
             
         except Exception as e:
             logger.error(f"Error in process loop: {e}", exc_info=True)
@@ -148,6 +200,40 @@ def process_new_trades():
         time.sleep(config.POLL_INTERVAL)
     
     logger.info("Trade monitoring stopped")
+
+
+def init_default_profile():
+    """Initialize default profile from config if none exists"""
+    try:
+        with db.get_session() as session:
+            # Check if any profiles exist
+            count = session.query(TargetProfile).count()
+            if count == 0:
+                # Create default profile from config
+                profile = TargetProfile(
+                    username=config.TARGET_USERNAME,
+                    profile_url=config.TARGET_USER_URL,
+                    is_active=True
+                )
+                session.add(profile)
+                session.commit()
+                logger.info(f"Created default profile: {config.TARGET_USERNAME}")
+    except Exception as e:
+        logger.error(f"Failed to init default profile: {e}")
+
+
+def init_bot_state():
+    """Initialize bot state to paused if not exists"""
+    try:
+        with db.get_session() as session:
+            state = session.query(BotState).first()
+            if not state:
+                state = BotState(state='paused')
+                session.add(state)
+                session.commit()
+                logger.info("Initialized bot state: paused")
+    except Exception as e:
+        logger.error(f"Failed to init bot state: {e}")
 
 
 def main():
@@ -184,7 +270,11 @@ def main():
     
     # Initialize components
     logger.info("Initializing database...")
-    db = TradeDatabase(config.DATABASE_PATH)
+    db = DatabaseManager(config.DATABASE_PATH)
+    
+    # Initialize bot state and default profile
+    init_bot_state()
+    init_default_profile()
     
     if not args.dashboard_only:
         logger.info("Initializing trader...")

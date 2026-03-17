@@ -691,3 +691,237 @@ window.addEventListener('offline', () => {
     showToast('Offline', 'Connection lost', 'error');
     updateConnectionStatus('disconnected');
 });
+
+// ===== BOT STATE (PLAY/PAUSE) =====
+let botState = { state: 'paused', is_running: false };
+
+async function loadBotState() {
+    try {
+        const response = await fetch('/api/bot/state');
+        if (response.ok) {
+            botState = await response.json();
+            updatePlayPauseButton();
+        }
+    } catch (error) {
+        console.error('Failed to load bot state:', error);
+    }
+}
+
+async function toggleBotState() {
+    try {
+        const response = await fetch('/api/bot/state', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({})
+        });
+        
+        if (response.ok) {
+            botState = await response.json();
+            updatePlayPauseButton();
+            showToast(
+                botState.is_running ? 'Bot Started' : 'Bot Paused',
+                botState.is_running ? 'Copy trading is now active' : 'Copy trading is paused',
+                botState.is_running ? 'success' : 'info'
+            );
+        }
+    } catch (error) {
+        console.error('Failed to toggle bot state:', error);
+        showToast('Error', 'Failed to toggle bot state', 'error');
+    }
+}
+
+function updatePlayPauseButton() {
+    const btn = document.getElementById('btn-play-pause');
+    const icon = document.getElementById('play-pause-icon');
+    const text = document.getElementById('play-pause-text');
+    
+    if (botState.is_running) {
+        btn.className = 'flex items-center space-x-2 px-4 py-2 rounded-lg font-semibold transition-all duration-200 running';
+        btn.style.background = '#00d084';
+        icon.className = 'fas fa-pause';
+        text.textContent = 'Running';
+    } else {
+        btn.className = 'flex items-center space-x-2 px-4 py-2 rounded-lg font-semibold transition-all duration-200 paused';
+        btn.style.background = '#ff4757';
+        icon.className = 'fas fa-play';
+        text.textContent = 'Paused';
+    }
+}
+
+// ===== PROFILE MANAGEMENT =====
+let profiles = [];
+
+async function loadProfiles() {
+    try {
+        const response = await fetch('/api/profiles');
+        if (response.ok) {
+            profiles = await response.json();
+            updateProfileSelect();
+        }
+    } catch (error) {
+        console.error('Failed to load profiles:', error);
+    }
+}
+
+function updateProfileSelect() {
+    const select = document.getElementById('profile-select');
+    select.innerHTML = '<option value="">Select Profile...</option>';
+    
+    profiles.forEach(profile => {
+        const option = document.createElement('option');
+        option.value = profile.id;
+        option.textContent = `@${profile.username}`;
+        if (profile.is_active) {
+            option.textContent += ' (Active)';
+            option.selected = true;
+        }
+        select.appendChild(option);
+    });
+}
+
+async function activateProfile(profileId) {
+    if (!profileId) return;
+    
+    try {
+        const response = await fetch(`/api/profiles/${profileId}/activate`, {
+            method: 'PUT'
+        });
+        
+        if (response.ok) {
+            const profile = await response.json();
+            showToast('Profile Activated', `@${profile.username} is now the target`, 'success');
+            await loadProfiles(); // Reload to update UI
+        } else {
+            const error = await response.json();
+            showToast('Error', error.error || 'Failed to activate profile', 'error');
+        }
+    } catch (error) {
+        console.error('Failed to activate profile:', error);
+        showToast('Error', 'Failed to activate profile', 'error');
+    }
+}
+
+async function addProfile(username, profileUrl) {
+    try {
+        const response = await fetch('/api/profiles', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+                username: username,
+                profile_url: profileUrl
+            })
+        });
+        
+        if (response.ok) {
+            const profile = await response.json();
+            showToast('Profile Added', `@${profile.username} added successfully`, 'success');
+            await loadProfiles();
+            return true;
+        } else {
+            const error = await response.json();
+            showToast('Error', error.error || 'Failed to add profile', 'error');
+            return false;
+        }
+    } catch (error) {
+        console.error('Failed to add profile:', error);
+        showToast('Error', 'Failed to add profile', 'error');
+        return false;
+    }
+}
+
+// ===== MODAL HANDLING =====
+function setupModalListeners() {
+    const modal = document.getElementById('profile-modal');
+    const btnAdd = document.getElementById('btn-add-profile');
+    const btnClose = document.getElementById('btn-close-modal');
+    const btnCancel = document.getElementById('btn-cancel-profile');
+    const form = document.getElementById('profile-form');
+    
+    // Open modal
+    btnAdd.addEventListener('click', () => {
+        modal.classList.remove('hidden');
+        document.getElementById('profile-username').focus();
+    });
+    
+    // Close modal
+    const closeModal = () => modal.classList.add('hidden');
+    btnClose.addEventListener('click', closeModal);
+    btnCancel.addEventListener('click', closeModal);
+    
+    // Close on overlay click
+    modal.querySelector('.modal-overlay').addEventListener('click', closeModal);
+    
+    // Submit form
+    form.addEventListener('submit', async (e) => {
+        e.preventDefault();
+        const username = document.getElementById('profile-username').value.trim();
+        const url = document.getElementById('profile-url').value.trim();
+        
+        if (await addProfile(username, url)) {
+            form.reset();
+            closeModal();
+        }
+    });
+}
+
+// ===== EXTENDED SETUP =====
+// Store original setupEventListeners reference
+const originalSetupListeners = setupEventListeners;
+
+setupEventListeners = function() {
+    // Call original
+    originalSetupListeners();
+    
+    // Setup Play/Pause button
+    document.getElementById('btn-play-pause').addEventListener('click', toggleBotState);
+    
+    // Setup Profile selector
+    document.getElementById('profile-select').addEventListener('change', (e) => {
+        activateProfile(e.target.value);
+    });
+    
+    // Setup Modal
+    setupModalListeners();
+};
+
+// Extend initializeDashboard
+const originalInit = initializeDashboard;
+
+initializeDashboard = async function() {
+    await originalInit();
+    
+    // Load bot state
+    await loadBotState();
+    
+    // Load profiles
+    await loadProfiles();
+};
+
+// Extend WebSocket handlers
+const originalSocketHandlers = setupWebSocket;
+
+setupWebSocket = function() {
+    originalSocketHandlers();
+    
+    if (!socket) return;
+    
+    // Bot state updates
+    socket.on('bot_state_update', (data) => {
+        botState = data;
+        updatePlayPauseButton();
+    });
+    
+    // Profile updates
+    socket.on('profile_added', () => {
+        loadProfiles();
+    });
+    
+    socket.on('profile_activated', (data) => {
+        showToast('Profile Changed', `@${data.username} is now active`, 'info');
+        loadProfiles();
+    });
+    
+    socket.on('profile_deleted', () => {
+        loadProfiles();
+    });
+};

@@ -151,3 +151,53 @@ class ScrapingLog(Base):
             f"<ScrapingLog(run_at={self.run_at}, success={self.success}, "
             f"trades_found={self.trades_found}, new_trades={self.new_trades})>"
         )
+
+
+class BotState(Base):
+    """
+    Speichert den Zustand des Bots (running/paused)
+    """
+    __tablename__ = 'bot_state'
+    
+    id = Column(Integer, primary_key=True)
+    state = Column(String(20), default='paused', nullable=False)  # running/paused
+    updated_at = Column(DateTime, server_default=func.now(), onupdate=func.now())
+    
+    def __repr__(self):
+        return f"<BotState(state={self.state}, updated_at={self.updated_at})>"
+    
+    def to_dict(self) -> dict:
+        return {
+            'state': self.state,
+            'updated_at': self.updated_at.isoformat() if self.updated_at else None,
+            'is_running': self.state == 'running'
+        }
+
+
+class TargetProfile(Base):
+    """
+    Profile die kopiert werden können
+    """
+    __tablename__ = 'target_profiles'
+    
+    id = Column(Integer, primary_key=True)
+    username = Column(String(100), unique=True, nullable=False)
+    profile_url = Column(String(500), nullable=False)
+    is_active = Column(Boolean, default=False, nullable=False, index=True)
+    added_at = Column(DateTime, server_default=func.now())
+    
+    __table_args__ = (
+        Index('idx_profiles_active', 'is_active'),
+    )
+    
+    def __repr__(self):
+        return f"<TargetProfile(username={self.username}, is_active={self.is_active})>"
+    
+    def to_dict(self) -> dict:
+        return {
+            'id': self.id,
+            'username': self.username,
+            'profile_url': self.profile_url,
+            'is_active': self.is_active,
+            'added_at': self.added_at.isoformat() if self.added_at else None,
+        }
