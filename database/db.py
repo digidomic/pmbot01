@@ -8,7 +8,7 @@ from sqlalchemy import create_engine, event
 from sqlalchemy.orm import sessionmaker, Session
 from sqlalchemy.exc import SQLAlchemyError
 
-from scraper.models import Base, Trade, ScraperState, ScrapingLog
+from scraper.models import Base, Trade, ScraperState, ScrapingLog, BotState, TargetProfile, Setting
 
 logger = logging.getLogger(__name__)
 
