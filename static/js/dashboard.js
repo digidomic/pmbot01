@@ -784,20 +784,29 @@ async function activateProfile(profileId) {
     
     try {
         const response = await fetch(`/api/profiles/${profileId}/activate`, {
-            method: 'PUT'
+            method: 'PUT',
+            headers: { 'Accept': 'application/json' }
         });
         
+        const text = await response.text();
+        let data;
+        try {
+            data = JSON.parse(text);
+        } catch (e) {
+            console.error('Invalid JSON response:', text);
+            showToast('Error', 'Server returned invalid response', 'error');
+            return;
+        }
+        
         if (response.ok) {
-            const profile = await response.json();
-            showToast('Profile Activated', `@${profile.username} is now the target`, 'success');
-            await loadProfiles(); // Reload to update UI
+            showToast('Profile Activated', `@${data.username} is now the target`, 'success');
+            await loadProfiles();
         } else {
-            const error = await response.json();
-            showToast('Error', error.error || 'Failed to activate profile', 'error');
+            showToast('Error', data.error || 'Failed to activate profile', 'error');
         }
     } catch (error) {
         console.error('Failed to activate profile:', error);
-        showToast('Error', 'Failed to activate profile', 'error');
+        showToast('Error', 'Network error - check console', 'error');
     }
 }
 
