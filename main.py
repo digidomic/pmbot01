@@ -78,11 +78,19 @@ def is_bot_running() -> bool:
 
 
 def get_active_profile():
-    """Get currently active target profile"""
+    """Get currently active target profile as dict"""
     try:
         with db.get_session() as session:
             profile = session.query(TargetProfile).filter_by(is_active=True).first()
-            return profile
+            if profile:
+                # Convert to dict while session is still open
+                return {
+                    'id': profile.id,
+                    'username': profile.username,
+                    'profile_url': profile.profile_url,
+                    'is_active': profile.is_active
+                }
+            return None
     except Exception as e:
         logger.error(f"Failed to get active profile: {e}")
         return None
@@ -104,10 +112,10 @@ def process_new_trades():
             
             # Check if we need to update scraper (profile changed)
             active_profile = get_active_profile()
-            if active_profile and active_profile.username != config.TARGET_USERNAME:
-                logger.info(f"Switching to profile: {active_profile.username}")
-                config.TARGET_USERNAME = active_profile.username
-                config.TARGET_USER_URL = active_profile.profile_url
+            if active_profile and active_profile['username'] != config.TARGET_USERNAME:
+                logger.info(f"Switching to profile: {active_profile['username']}")
+                config.TARGET_USERNAME = active_profile['username']
+                config.TARGET_USER_URL = active_profile['profile_url']
                 scraper = PolymarketScraper(config.TARGET_USERNAME)
             
             # Fetch recent activity from target user
