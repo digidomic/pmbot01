@@ -35,7 +35,7 @@ class PolymarketScraper:
     """Scraper for Polymarket user activity"""
     
     BASE_URL = "https://polymarket.com"
-    API_URL = "https://clob.polymarket.com"  # CLOB API
+    API_URL = "https://clob.polymarket.com"
     
     def __init__(self, target_username: str = "0x8dxd"):
         self.target_username = target_username
@@ -65,16 +65,13 @@ class PolymarketScraper:
         trades = []
         
         try:
-            # Map username to wallet address if needed
-            # For now, assume target_username might be a wallet address
             user_id = self.target_username
             
             # If username starts with @, remove it
             if user_id.startswith('@'):
                 user_id = user_id[1:]
             
-            # If it's not a valid wallet (0x...), we'd need to resolve it
-            # For now, assume the user provides the wallet address
+            # API requires wallet address
             if not user_id.startswith('0x'):
                 logger.warning(f"Username {user_id} is not a wallet address. API requires wallet address.")
                 return trades
@@ -151,76 +148,6 @@ class PolymarketScraper:
             return None
     
     def _fetch_from_web(self, limit: int = 20) -> list[RawTrade]:
-        """
-        Fetch recent trades from user's activity page (fallback method)
-        Note: This uses the public profile page. In production, 
-        consider using the CLOB API for more reliable data.
-        """
-        trades = []
-        
-        try:
-            logger.info(f"Fetching activity for {self.target_username}")
-            response = self.session.get(
-                f"{self.target_url}?tab=activity",
-                timeout=30
-            )
-            response.raise_for_status()
-            
-            # Parse the HTML
-            soup = BeautifulSoup(response.text, 'html.parser')
-            
-            # Try to find activity data in script tags (Next.js data)
-            scripts = soup.find_all('script')
-            for script in scripts:
-                script_id = script.get('id', '')
-                script_type = script.get('type', '')
-                
-                # Check for __NEXT_DATA__ script (new format: type="application/json")
-                if script_id == '__NEXT_DATA__' or (script.string and '__NEXT_DATA__' in script.string):
-                    try:
-                        json_text = None
-                        
-                        # New format: <script id="__NEXT_DATA__" type="application/json">{...}</script>
-                        if script_type == 'application/json' and script.string:
-                            json_text = script.string.strip()
-                        
-                        # Old format: window.__NEXT_DATA__ = {...};
-                        elif script.string:
-                            json_match = re.search(r'window\.__NEXT_DATA__\s*=\s*({.+?});', script.string, re.DOTALL)
-                            if not json_match:
-                                json_match = re.search(r'window\.__NEXT_DATA__\s*=\s*({.+})', script.string, re.DOTALL)
-                            if json_match:
-                                json_text = json_match.group(1)
-                        
-                        if json_text:
-                            data = json.loads(json_text)
-                            trades = self._parse_nextjs_data(data, limit)
-                            if trades:
-                                logger.info(f"Parsed {len(trades)} trades from Next.js data")
-                                return trades
-                        else:
-                            logger.warning("Found __NEXT_DATA__ script but couldn't extract JSON text")
-                            
-                    except json.JSONDecodeError as e:
-                        logger.warning(f"JSON decode error: {e}")
-                    except Exception as e:
-                        logger.warning(f"Failed to parse Next.js data: {e}")
-            
-            logger.info("No Next.js data found, trying HTML fallback")
-            
-            # Fallback: Try to parse activity from HTML
-            trades = self._parse_html_activity(soup, limit)
-            
-        except requests.RequestException as e:
-            logger.error(f"Request failed: {e}")
-        except Exception as e:
-            logger.error(f"Unexpected error: {e}")
-        
-        return trades
-        Note: This uses the public profile page. In production, 
-        consider using the CLOB API for more reliable data.
-        """
-        trades = []
         
         try:
             logger.info(f"Fetching activity for {self.target_username}")
