@@ -16,7 +16,8 @@ logger = logging.getLogger(__name__)
 
 app = Flask(__name__)
 app.config['SECRET_KEY'] = 'pmbot-secret-key-change-in-production'
-socketio = SocketIO(app, cors_allowed_origins="*")
+# Use threading mode to avoid werkzeug issues
+socketio = SocketIO(app, cors_allowed_origins="*", async_mode='threading')
 
 # Global database instance
 db = DatabaseManager(config.DATABASE_PATH)
