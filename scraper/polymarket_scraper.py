@@ -1,6 +1,7 @@
 """
 Polymarket Activity Scraper
 Scrapes user activity from Polymarket profile pages
+Supports proxy configuration for external API calls
 """
 import re
 import json
@@ -13,6 +14,8 @@ from urllib.parse import urljoin
 
 import requests
 from bs4 import BeautifulSoup
+
+from config.proxy_config import USE_PROXY, get_proxy_dict, PROXY_HOST, PROXY_PORT
 
 logger = logging.getLogger(__name__)
 
@@ -32,7 +35,7 @@ class RawTrade:
 
 
 class PolymarketScraper:
-    """Scraper for Polymarket user activity"""
+    """Scraper for Polymarket user activity with proxy support"""
     
     BASE_URL = "https://polymarket.com"
     API_URL = "https://clob.polymarket.com"
@@ -41,9 +44,21 @@ class PolymarketScraper:
         self.target_username = target_username
         self.target_url = f"{self.BASE_URL}/profile/@{target_username}"
         self.session = requests.Session()
+        
+        # Setup headers
         self.session.headers.update({
             'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'
         })
+        
+        # Configure proxy if enabled
+        self.proxy_dict = get_proxy_dict()
+        if USE_PROXY and self.proxy_dict:
+            logger.info(f"Proxy enabled for scraper: {PROXY_HOST}:{PROXY_PORT}")
+            self.session.proxies.update(self.proxy_dict)
+        elif USE_PROXY:
+            logger.warning("USE_PROXY=true but proxy configuration incomplete")
+        else:
+            logger.debug("Proxy disabled for scraper")
     
     def fetch_activity(self, limit: int = 20) -> list[RawTrade]:
         """
@@ -61,7 +76,7 @@ class PolymarketScraper:
         return self._fetch_from_web(limit)
     
     def _fetch_from_api(self, limit: int = 20) -> list[RawTrade]:
-        """Fetch activity from CLOB API"""
+        """Fetch activity from CLOB API with proxy support"""
         trades = []
         
         try:
@@ -78,6 +93,8 @@ class PolymarketScraper:
             
             url = f"{self.API_URL}/activity/user/{user_id}"
             logger.info(f"Fetching from CLOB API: {url}")
+            if USE_PROXY:
+                logger.debug(f"Using proxy: {PROXY_HOST}:{PROXY_PORT}")
             
             response = self.session.get(url, timeout=30)
             response.raise_for_status()
@@ -148,9 +165,14 @@ class PolymarketScraper:
             return None
     
     def _fetch_from_web(self, limit: int = 20) -> list[RawTrade]:
+        """Fetch activity from web scraping with proxy support"""
+        trades = []
         
         try:
             logger.info(f"Fetching activity for {self.target_username}")
+            if USE_PROXY:
+                logger.debug(f"Using proxy for web scraping: {PROXY_HOST}:{PROXY_PORT}")
+            
             response = self.session.get(
                 f"{self.target_url}?tab=activity",
                 timeout=30
@@ -166,7 +188,7 @@ class PolymarketScraper:
                 script_id = script.get('id', '')
                 script_type = script.get('type', '')
                 
-                # Check for __NEXT_DATA__ script (new format: type="application/json")
+                # Check for __NEXT_DATA__ script
                 if script_id == '__NEXT_DATA__' or (script.string and '__NEXT_DATA__' in script.string):
                     try:
                         json_text = None
@@ -249,8 +271,6 @@ class PolymarketScraper:
             
             if not activities:
                 logger.warning("No activities found in Next.js data structure")
-                # Debug: Show available keys
-                logger.debug(f"Available keys in pageProps: {list(page_props.keys())}")
                 return trades
             
             logger.info(f"Parsing {len(activities[:limit])} activities")
@@ -328,7 +348,6 @@ class PolymarketScraper:
         for row in activity_rows[:limit]:
             try:
                 # Try to extract trade info from HTML
-                # This is a fallback and may need adjustment based on actual HTML structure
                 cells = row.find_all(['td', 'div'])
                 if len(cells) >= 4:
                     # Extract data from cells
@@ -394,15 +413,13 @@ class PolymarketScraper:
         trades = []
         
         try:
-            # Use CLOB client to get trades
-            # This is a placeholder - actual implementation depends on clob-client
             logger.info("Fetching trades via CLOB API")
-            
-            # Get user's trades from API
-            # Note: This requires the target user's address
-            # response = api_client.get_trades(...)
             
         except Exception as e:
             logger.error(f"API fetch failed: {e}")
         
         return trades
+    
+    def is_proxy_enabled(self) -> bool:
+        """Check if proxy is enabled and configured"""
+        return USE_PROXY and bool(self.proxy_dict)

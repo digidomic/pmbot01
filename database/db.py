@@ -1,5 +1,6 @@
 """
 Database initialization and session management using SQLAlchemy
+Supports both SQLite (local) and PostgreSQL (remote/network)
 """
 import logging
 from pathlib import Path
@@ -9,6 +10,12 @@ from sqlalchemy.orm import sessionmaker, Session
 from sqlalchemy.exc import SQLAlchemyError
 
 from scraper.models import Base, Trade, ScraperState, ScrapingLog, BotState, TargetProfile, Setting
+from config.network_config import (
+    get_database_url, 
+    get_database_engine_options, 
+    is_remote_database,
+    DB_PATH
+)
 
 logger = logging.getLogger(__name__)
 
@@ -17,31 +24,40 @@ class DatabaseManager:
     """
     Manages database connections, sessions, and initialization.
     Uses SQLAlchemy ORM for all database operations.
+    Supports SQLite (local) and PostgreSQL (remote/network architecture)
     """
     
-    def __init__(self, db_path: str = "database/trades.db"):
+    def __init__(self, db_path: str = None):
         """
         Initialize database manager
         
         Args:
-            db_path: Path to SQLite database file
+            db_path: Path to SQLite database file (only used for SQLite mode)
         """
-        self.db_path = Path(db_path)
-        self.db_path.parent.mkdir(parents=True, exist_ok=True)
+        self.is_postgres = is_remote_database()
         
-        # Create engine with SQLite optimizations
+        if self.is_postgres:
+            # PostgreSQL mode - use connection from network_config
+            self.db_url = get_database_url()
+            logger.info(f"Using PostgreSQL database: {self.db_url.split('@')[-1]}")  # Hide credentials
+        else:
+            # SQLite mode
+            self.db_path = Path(db_path or DB_PATH)
+            self.db_path.parent.mkdir(parents=True, exist_ok=True)
+            self.db_url = f"sqlite:///{self.db_path}"
+            logger.info(f"Using SQLite database: {self.db_path}")
+        
+        # Create engine with appropriate options
+        engine_options = get_database_engine_options()
         self.engine = create_engine(
-            f"sqlite:///{self.db_path}",
+            self.db_url,
             echo=False,  # Set to True for debugging SQL
-            connect_args={
-                "check_same_thread": False,  # Allow multi-threading
-            },
-            pool_pre_ping=True,  # Verify connections before using
-            pool_recycle=300,  # Recycle connections after 5 minutes
+            **engine_options
         )
         
-        # Enable foreign keys and WAL mode for better concurrency
-        self._setup_sqlite_pragmas()
+        # Setup SQLite pragmas only for SQLite
+        if not self.is_postgres:
+            self._setup_sqlite_pragmas()
         
         # Create session factory
         self.SessionLocal = sessionmaker(
@@ -53,7 +69,7 @@ class DatabaseManager:
         # Initialize tables
         self.init_db()
         
-        logger.info(f"Database initialized at {self.db_path}")
+        logger.info(f"Database initialized successfully")
     
     def _setup_sqlite_pragmas(self):
         """Configure SQLite pragmas for better performance"""
@@ -176,18 +192,22 @@ class DatabaseManager:
         Base.metadata.drop_all(bind=self.engine)
         self.init_db()
         logger.info("Database reset complete")
+    
+    def get_db_type(self) -> str:
+        """Get the database type being used"""
+        return 'PostgreSQL' if self.is_postgres else 'SQLite'
 
 
 # Global instance for convenience
 db_manager = None
 
 
-def init_db_manager(db_path: str = "database/trades.db") -> DatabaseManager:
+def init_db_manager(db_path: str = None) -> DatabaseManager:
     """
     Initialize the global database manager
     
     Args:
-        db_path: Path to SQLite database
+        db_path: Path to SQLite database (only used for SQLite mode)
         
     Returns:
         DatabaseManager instance

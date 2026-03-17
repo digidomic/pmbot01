@@ -1,14 +1,114 @@
 version: '3.8'
 
 services:
+  # PostgreSQL Database (for network architecture)
+  db:
+    image: postgres:15-alpine
+    container_name: pmbot_db
+    environment:
+      POSTGRES_USER: ${DB_USER:-pmbot}
+      POSTGRES_PASSWORD: ${DB_PASSWORD:-pmbot_secret}
+      POSTGRES_DB: ${DB_NAME:-pmbot}
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    ports:
+      - "${DB_PORT:-5432}:5432"
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${DB_USER:-pmbot}"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  # Bot Service (Scraper + Trader)
+  # Runs on VPS with proxy support
+  bot:
+    build: .
+    container_name: pmbot_bot
+    environment:
+      - PYTHONUNBUFFERED=1
+      # Database (connect to PostgreSQL)
+      - DB_TYPE=postgresql
+      - DB_HOST=db
+      - DB_PORT=5432
+      - DB_NAME=${DB_NAME:-pmbot}
+      - DB_USER=${DB_USER:-pmbot}
+      - DB_PASSWORD=${DB_PASSWORD:-pmbot_secret}
+      # Proxy Settings
+      - USE_PROXY=${USE_PROXY:-false}
+      - PROXY_HOST=${PROXY_HOST:-}
+      - PROXY_PORT=${PROXY_PORT:-}
+      - PROXY_USERNAME=${PROXY_USERNAME:-}
+      - PROXY_PASSWORD=${PROXY_PASSWORD:-}
+      # Trading Settings from .env
+      - POLYMARKET_API_KEY=${POLYMARKET_API_KEY}
+      - POLYMARKET_SECRET=${POLYMARKET_SECRET}
+      - POLYMARKET_PASSPHRASE=${POLYMARKET_PASSPHRASE}
+      - TARGET_USERNAME=${TARGET_USERNAME:-0x8dxd}
+      - TARGET_USER_URL=${TARGET_USER_URL:-https://polymarket.com/profile/@0x8dxd}
+      - MAX_TRADE_AMOUNT_USDC=${MAX_TRADE_AMOUNT_USDC:-50}
+      - TRADE_PERCENTAGE=${TRADE_PERCENTAGE:-10}
+      - DRY_RUN=${DRY_RUN:-true}
+      - POLL_INTERVAL=${POLL_INTERVAL:-30}
+      - LOG_LEVEL=${LOG_LEVEL:-INFO}
+    depends_on:
+      db:
+        condition: service_healthy
+    restart: unless-stopped
+    command: python run_bot_only.py
+    # Optional: Specify network mode for proxy if needed
+    # network_mode: bridge
+
+  # Dashboard Service
+  # Stateless - connects to database
+  dashboard:
+    build: .
+    container_name: pmbot_dashboard
+    ports:
+      - "${DASHBOARD_PORT:-8080}:8080"
+    environment:
+      - PYTHONUNBUFFERED=1
+      # Database (connect to PostgreSQL)
+      - DB_TYPE=postgresql
+      - DB_HOST=db
+      - DB_PORT=5432
+      - DB_NAME=${DB_NAME:-pmbot}
+      - DB_USER=${DB_USER:-pmbot}
+      - DB_PASSWORD=${DB_PASSWORD:-pmbot_secret}
+      # Dashboard Settings
+      - DASHBOARD_HOST=0.0.0.0
+      - DASHBOARD_PORT=8080
+      - LOG_LEVEL=${LOG_LEVEL:-INFO}
+    depends_on:
+      db:
+        condition: service_healthy
+    restart: unless-stopped
+    command: python run_dashboard_only.py
+
+  # All-in-One Service (legacy mode - for simple deployments)
+  # Combines bot + dashboard in one container (uses SQLite)
   pmbot:
     build: .
     container_name: pmbot01
     ports:
-      - "8080:8080"
+      - "${DASHBOARD_PORT:-8080}:8080"
     volumes:
       - ./database:/app/database
-      - ./.env:/app/.env
-    restart: unless-stopped
+      - ./.env:/app/.env:ro
     environment:
       - PYTHONUNBUFFERED=1
+      # Use SQLite for simple deployment
+      - DB_TYPE=sqlite
+      - DATABASE_PATH=database/trades.db
+      # Proxy Settings (optional)
+      - USE_PROXY=${USE_PROXY:-false}
+      - PROXY_HOST=${PROXY_HOST:-}
+      - PROXY_PORT=${PROXY_PORT:-}
+      - PROXY_USERNAME=${PROXY_USERNAME:-}
+      - PROXY_PASSWORD=${PROXY_PASSWORD:-}
+    restart: unless-stopped
+    profiles:
+      - legacy  # Only start with: docker-compose --profile legacy up
+
+volumes:
+  postgres_data:
