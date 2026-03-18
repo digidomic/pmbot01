@@ -293,12 +293,13 @@ class ClobTrader:
             logger.error(f"Failed to refresh market cache: {e}")
             return False
     
-    def validate_market(self, market_slug: str, auto_refresh: bool = True) -> Optional[dict]:
+    def validate_market(self, market_slug: str, condition_id: Optional[str] = None, auto_refresh: bool = True) -> Optional[dict]:
         """
         Validiere ob ein Market existiert und tradable ist
         
         Args:
             market_slug: Der Market Slug (z.B. "will-bitcoin-hit-100k")
+            condition_id: Optional condition ID (used for dynamic market resolution)
             auto_refresh: Cache automatisch aktualisieren wenn nicht gefunden
             
         Returns:
@@ -312,6 +313,11 @@ class ClobTrader:
             if market_data.get('closed') or not market_data.get('active', True):
                 logger.warning(f"Market {market_slug} is closed or inactive")
                 return None
+            
+            # If condition_id provided, update market_data with it (for dynamic resolution)
+            if condition_id and not market_data.get('condition_id'):
+                market_data['condition_id'] = condition_id
+            
             return market_data
         
         # Nicht im Cache - versuche Refresh
@@ -323,7 +329,24 @@ class ClobTrader:
                     if market_data.get('closed') or not market_data.get('active', True):
                         logger.warning(f"Market {market_slug} is closed or inactive")
                         return None
+                    
+                    # If condition_id provided, update market_data with it
+                    if condition_id:
+                        market_data['condition_id'] = condition_id
+                    
                     return market_data
+        
+        # If condition_id provided but market not in cache, create minimal market data
+        if condition_id:
+            logger.info(f"Creating minimal market data for {market_slug} with provided condition_id")
+            return {
+                'condition_id': condition_id,
+                'market_slug': market_slug,
+                'question': f'Dynamic market: {market_slug}',
+                'active': True,
+                'closed': False,
+                'tokens': []  # Will be populated from orderbook
+            }
         
         logger.error(f"Market {market_slug} not found")
         return None
@@ -396,6 +419,7 @@ class ClobTrader:
         side: str,
         size: float,
         price: Optional[float] = None,
+        condition_id: Optional[str] = None,
         retry_count: int = 0
     ) -> tuple[bool, Optional[str], Optional[dict]]:
         """
@@ -407,6 +431,7 @@ class ClobTrader:
             side: "BUY" oder "SELL"
             size: Order-Größe in USDC
             price: Limit-Preis (optional, sonst Market Order)
+            condition_id: Optional condition ID for dynamic market resolution
             retry_count: Intern für Retries
             
         Returns:
@@ -428,21 +453,40 @@ class ClobTrader:
                 'outcome': outcome,
                 'side': side,
                 'size': size,
-                'price': price
+                'price': price,
+                'condition_id': condition_id
             }
         
         try:
-            # 1. Market validieren
-            market_data = self.validate_market(market_slug)
+            # 1. Market validieren (mit optionaler condition_id für dynamische Auflösung)
+            market_data = self.validate_market(market_slug, condition_id=condition_id)
             if not market_data:
                 return False, f"Market {market_slug} not found or not tradable", None
             
-            condition_id = market_data.get('condition_id')
-            if not condition_id:
-                return False, "No condition_id in market data", None
+            # Use provided condition_id or from market_data
+            final_condition_id = condition_id or market_data.get('condition_id')
+            if not final_condition_id:
+                return False, "No condition_id available (neither provided nor in market data)", None
             
             # 2. Token ID ermitteln
             token_id = self.get_token_id(market_data, outcome)
+            
+            # If no token_id in market data, try to get from CLOB API directly
+            if not token_id and final_condition_id:
+                try:
+                    logger.debug(f"Attempting to get token_id from CLOB API for condition {final_condition_id[:20]}...")
+                    # Try to get market data from CLOB
+                    clob_market = self.client.get_market(final_condition_id)
+                    if clob_market and hasattr(clob_market, 'tokens'):
+                        for token in clob_market.tokens:
+                            token_outcome = token.get('outcome', '').upper().strip()
+                            if outcome.upper() in token_outcome:
+                                token_id = token.get('token_id')
+                                logger.debug(f"Found token_id from CLOB: {token_id[:20]}...")
+                                break
+                except Exception as e:
+                    logger.debug(f"Could not get token from CLOB: {e}")
+            
             if not token_id:
                 return False, f"Token for outcome '{outcome}' not found", None
             
@@ -521,7 +565,7 @@ class ClobTrader:
                     'side': side,
                     'size': size,
                     'price': price,
-                    'condition_id': condition_id,
+                    'condition_id': final_condition_id,
                     'token_id': token_id
                 }
             else:
@@ -537,7 +581,7 @@ class ClobTrader:
                     logger.info(f"Retrying in {self.RETRY_DELAY}s... (attempt {retry_count + 1}/{self.MAX_RETRIES})")
                     time.sleep(self.RETRY_DELAY)
                     return self.create_order(
-                        market_slug, outcome, side, size, price, retry_count + 1
+                        market_slug, outcome, side, size, price, condition_id, retry_count + 1
                     )
             
             return False, error_msg, None

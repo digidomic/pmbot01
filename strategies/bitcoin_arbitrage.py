@@ -15,7 +15,7 @@ from typing import Optional, Dict, Any, Callable, List
 from dataclasses import dataclass, field
 from collections import deque
 
-from config.strategy_config import arbitrage_config
+from config.strategy_config import arbitrage_config, get_current_market_slug, get_current_condition_id
 from trader.clob_trader import ClobTrader
 
 logger = logging.getLogger(__name__)
@@ -325,6 +325,15 @@ class BitcoinArbitrageStrategy:
             logger.warning("No trader available, cannot execute signal")
             return False
         
+        # Check for market updates before executing (handles dynamic market rotation)
+        if arbitrage_config.MARKET_RESOLVER_ENABLED:
+            current_slug = get_current_market_slug()
+            current_condition = get_current_condition_id()
+            
+            # Log market status
+            if current_slug:
+                logger.debug(f"Using market: {current_slug} (condition: {current_condition[:20]}...)")
+        
         # Close existing position if opposite signal
         if self.active_position:
             should_close = False
@@ -358,20 +367,26 @@ class BitcoinArbitrageStrategy:
         size = max(size, arbitrage_config.MIN_POSITION_SIZE)
         size = round(size, 2)
         
-        # Find Bitcoin market on Polymarket
+        # Find Bitcoin market on Polymarket (uses dynamic resolver if enabled)
         market_slug = self._find_bitcoin_market()
         if not market_slug:
             logger.error("No suitable Bitcoin market found on Polymarket")
             return False
         
-        logger.info(f"Executing {side} position on {arbitrage_config.MARKET_TYPE}: ${size} on {market_slug}")
+        # Get current condition ID for logging and trading
+        condition_id = get_current_condition_id() if arbitrage_config.MARKET_RESOLVER_ENABLED else None
+        if condition_id:
+            logger.info(f"Executing {side} position on {arbitrage_config.MARKET_TYPE}: ${size} on {market_slug} (condition: {condition_id[:20]}...)")
+        else:
+            logger.info(f"Executing {side} position on {arbitrage_config.MARKET_TYPE}: ${size} on {market_slug}")
         
-        # Create order
+        # Create order (pass condition_id for dynamic market resolution)
         success, error, result = self.trader.create_order(
             market_slug=market_slug,
             outcome=outcome,
             side='BUY',
-            size=size
+            size=size,
+            condition_id=condition_id
         )
         
         if success:
@@ -444,18 +459,27 @@ class BitcoinArbitrageStrategy:
     def _find_bitcoin_market(self) -> Optional[str]:
         """
         Find the appropriate BTC Up/Down market based on MARKET_TYPE config
+        Uses dynamic market resolver if enabled.
         
         Returns:
             Market slug for 5m or 15m Up/Down market
         """
-        # Use configured market type (5m or 15m)
+        # Use dynamic resolver if enabled
+        if arbitrage_config.MARKET_RESOLVER_ENABLED:
+            market_slug = get_current_market_slug()
+            if market_slug:
+                logger.debug(f"Using dynamic {arbitrage_config.MARKET_TYPE} market: {market_slug}")
+                return market_slug
+            logger.warning("Dynamic resolver returned no market, using fallback")
+        
+        # Fallback to configured static values
         if arbitrage_config.MARKET_TYPE == 'updown_5m':
             market_slug = arbitrage_config.UPDOWN_5M_SLUG
-            logger.debug(f"Using 5-minute Up/Down market: {market_slug}")
+            logger.debug(f"Using static 5-minute Up/Down market: {market_slug}")
             return market_slug
         else:
             market_slug = arbitrage_config.UPDOWN_15M_SLUG
-            logger.debug(f"Using 15-minute Up/Down market: {market_slug}")
+            logger.debug(f"Using static 15-minute Up/Down market: {market_slug}")
             return market_slug
     
     def check_position(self, current_price: float):
@@ -489,6 +513,17 @@ class BitcoinArbitrageStrategy:
         stats['active_position'] = self.active_position
         stats['daily_trades'] = self.daily_trades
         stats['daily_limit'] = arbitrage_config.MAX_DAILY_TRADES
+        
+        # Add market resolver status
+        if arbitrage_config.MARKET_RESOLVER_ENABLED:
+            resolver_status = arbitrage_config.get_market_resolver_status()
+            stats['market_resolver'] = resolver_status
+            stats['current_market_slug'] = resolver_status.get('market_slug')
+            stats['current_condition_id'] = resolver_status.get('condition_id')
+        else:
+            stats['market_resolver'] = {'enabled': False}
+            stats['current_market_slug'] = arbitrage_config.UPDOWN_5M_SLUG if arbitrage_config.MARKET_TYPE == 'updown_5m' else arbitrage_config.UPDOWN_15M_SLUG
+        
         return stats
     
     def start(self):

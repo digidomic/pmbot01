@@ -342,8 +342,18 @@ def main():
         bitcoin_ws_client.start()
         
         # Get market type from strategy config
-        from config.strategy_config import arbitrage_config
+        from config.strategy_config import arbitrage_config, get_current_market_slug, get_current_condition_id
         market_type = arbitrage_config.MARKET_TYPE
+        
+        # Log market resolver status
+        if arbitrage_config.MARKET_RESOLVER_ENABLED:
+            logger.info(f"🔍 Market Resolver: ENABLED (interval: {arbitrage_config.MARKET_RESOLVER_INTERVAL}s)")
+            current_slug = get_current_market_slug()
+            current_condition = get_current_condition_id()
+            logger.info(f"   Current Market: {current_slug}")
+            logger.info(f"   Condition ID: {current_condition[:30]}...")
+        else:
+            logger.info(f"🔍 Market Resolver: DISABLED (using static values)")
         
         logger.info(f"📡 Connected to Coinbase WebSocket")
         logger.info(f"📊 Market Type: {market_type}")
