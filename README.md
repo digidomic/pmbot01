@@ -2,7 +2,22 @@
 
 🤖 **PM Bot** is an automated trading bot for Polymarket with multiple strategies:
 - **Copy Trading**: Monitor and copy trades from target users
-- **Bitcoin Arbitrage**: Detect BTC price movements and trade prediction markets
+- **Bitcoin Up/Down**: Trade BTC 5-minute and 15-minute Up/Down prediction markets
+
+## 🆕 Bitcoin Up/Down Strategy (NEW!)
+
+Trade short-term BTC prediction markets:
+- **5-Minute Up/Down**: "Will BTC be higher in 5 minutes?"
+- **15-Minute Up/Down**: "Will BTC be higher in 15 minutes?"
+
+**Strategy Logic:**
+- 📈 BTC price **rises** → **BUY YES** (bet on price going up)
+- 📉 BTC price **falls** → **BUY NO** (bet on price going down)
+- ⏱️ **Max hold time**: 5 or 15 minutes (market auto-resolves)
+
+**Market URLs:**
+- 5m: https://polymarket.com/event/btc-updown-5m-1773835200
+- 15m: https://polymarket.com/event/btc-updown-15m-1773835200
 
 ## 🆕 Architecture v2.0 - Separated Dashboard + Bot
 
@@ -272,8 +287,11 @@ python run_dashboard_only.py
 # Copy Trading explicitly
 python main.py --strategy=copy
 
-# Bitcoin Arbitrage Strategy
+# Bitcoin Up/Down Strategy (5-minute market)
 python main.py --strategy=bitcoin_arbitrage
+
+# Bitcoin Up/Down Strategy (15-minute market)
+MARKET_TYPE=updown_15m python main.py --strategy=bitcoin_arbitrage
 
 # Custom dashboard port
 python run_dashboard_only.py
@@ -298,21 +316,50 @@ python run_bot_only.py  # Default strategy
 - Latency tracking
 - Proxy support for VPS deployments
 
-### 2. Bitcoin Arbitrage Strategy
+### 2. Bitcoin Up/Down Strategy
 
-Monitors BTC price movements via Coinbase WebSocket and trades Bitcoin prediction markets on Polymarket.
+Monitors BTC price movements via Coinbase WebSocket and trades Bitcoin Up/Down prediction markets on Polymarket.
+
+**Markets:**
+- **5-Minute**: Will BTC price be higher in 5 minutes?
+- **15-Minute**: Will BTC price be higher in 15 minutes?
 
 **Usage**:
 ```bash
+# 5-Minute Up/Down (default)
 python main.py --strategy=bitcoin_arbitrage
+
+# 15-Minute Up/Down
+MARKET_TYPE=updown_15m python main.py --strategy=bitcoin_arbitrage
+```
+
+**Configuration** (in `.env`):
+```env
+# Market Type: updown_5m or updown_15m
+MARKET_TYPE=updown_5m
+
+# Condition IDs (optional - defaults built-in)
+UPDOWN_5M_CONDITION_ID=0x8bebabda22b19d30df59c9e63f3f730f0f4bb32e3c6669522cf549863f85be1d
+UPDOWN_15M_CONDITION_ID=0x0a29940b17ba72bc8eb2a5534445bb18eb126a3d6e0c8e06de5e74da97c3480d
+
+# Market Slugs (optional - defaults built-in)
+UPDOWN_5M_SLUG=btc-updown-5m-1773835200
+UPDOWN_15M_SLUG=btc-updown-15m-1773835200
 ```
 
 **Features**:
 - Real-time BTC price feed from Coinbase
 - Momentum-based signal generation
 - Dynamic threshold adjustment based on volatility
-- Position management with profit targets and stop-loss
-- Automatic market discovery on Polymarket
+- **Max hold time: 5 or 15 minutes** (market auto-resolves)
+- Early exit on profit target or stop-loss
+
+**How it works:**
+1. Bot monitors BTC price in real-time via Coinbase WebSocket
+2. When price rises → Buys YES tokens (bet BTC will be higher)
+3. When price falls → Buys NO tokens (bet BTC will be lower)
+4. Position automatically closes when market resolves (5m/15m)
+5. Payout happens based on actual BTC price movement
 
 ## 🌐 Network Architecture Guide
 

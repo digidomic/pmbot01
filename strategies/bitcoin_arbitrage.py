@@ -48,7 +48,8 @@ class Position:
     side: str  # 'YES' or 'NO'
     entry_time: datetime
     signal: Signal
-    market_slug: str = "bitcoin-arbitrage"
+    market_slug: str = "btc-updown"
+    market_type: str = "5m"  # '5m' or '15m'
     
     def current_pnl(self, current_price: float) -> float:
         """Calculate current PnL percentage"""
@@ -61,18 +62,21 @@ class Position:
         """Check if position should be closed"""
         pnl = self.current_pnl(current_price)
         
-        # Profit target reached
+        # For Up/Down markets: Hold until market resolves (5m or 15m)
+        elapsed = (datetime.now() - self.entry_time).total_seconds()
+        max_hold_time = 300 if self.market_type == '5m' else 900  # 5min or 15min
+        
+        # Market resolved - exit position
+        if elapsed >= max_hold_time:
+            return True, f"Market resolved: {elapsed:.0f}s elapsed ({self.market_type} market)"
+        
+        # Profit target reached (optional - early exit)
         if pnl >= arbitrage_config.PROFIT_TARGET:
             return True, f"Profit target reached: {pnl:.2%}"
         
-        # Stop loss hit
+        # Stop loss hit (optional - early exit)
         if pnl <= -arbitrage_config.STOP_LOSS:
             return True, f"Stop loss hit: {pnl:.2%}"
-        
-        # Timeout check
-        elapsed = (datetime.now() - self.entry_time).total_seconds()
-        if elapsed >= arbitrage_config.STOP_LOSS_TIMEOUT:
-            return True, f"Timeout: {elapsed:.0f}s elapsed"
         
         return False, ""
 
@@ -141,10 +145,16 @@ class PriceHistory:
 
 class BitcoinArbitrageStrategy:
     """
-    Bitcoin Arbitrage Strategy
+    Bitcoin Up/Down Arbitrage Strategy
     
-    Detects price movements on Coinbase and generates trading signals
-    for Polymarket Bitcoin prediction markets.
+    Detects price movements on Coinbase and trades BTC Up/Down markets on Polymarket:
+    - 5-Minute Up/Down: "Will BTC be higher in 5 minutes?"
+    - 15-Minute Up/Down: "Will BTC be higher in 15 minutes?"
+    
+    Strategy:
+    - BTC price rises → BUY YES (bet on price increase)
+    - BTC price falls → BUY NO (bet on price decrease)
+    - Hold until market resolves (5m or 15m max)
     """
     
     def __init__(self, trader: Optional[ClobTrader] = None):
@@ -172,14 +182,15 @@ class BitcoinArbitrageStrategy:
             'total_pnl': 0.0,
             'last_signal': None,
             'last_price': None,
-            'price_change_24h': 0.0
+            'price_change_24h': 0.0,
+            'market_type': arbitrage_config.MARKET_TYPE
         }
         
         # Running state
         self._running = False
         self._thread: Optional[threading.Thread] = None
         
-        logger.info("BitcoinArbitrageStrategy initialized")
+        logger.info(f"BitcoinUpDownStrategy initialized ({arbitrage_config.MARKET_TYPE})")
     
     def on_price_update(self, price: float, volume: float = 0.0) -> Optional[TradeSignal]:
         """
@@ -353,7 +364,7 @@ class BitcoinArbitrageStrategy:
             logger.error("No suitable Bitcoin market found on Polymarket")
             return False
         
-        logger.info(f"Executing {side} position: ${size} on {market_slug}")
+        logger.info(f"Executing {side} position on {arbitrage_config.MARKET_TYPE}: ${size} on {market_slug}")
         
         # Create order
         success, error, result = self.trader.create_order(
@@ -370,7 +381,8 @@ class BitcoinArbitrageStrategy:
                 side=side,
                 entry_time=datetime.now(),
                 signal=signal.signal,
-                market_slug=market_slug
+                market_slug=market_slug,
+                market_type='5m' if arbitrage_config.MARKET_TYPE == 'updown_5m' else '15m'
             )
             self.daily_trades += 1
             self.last_trade_time = datetime.now()
@@ -431,28 +443,20 @@ class BitcoinArbitrageStrategy:
     
     def _find_bitcoin_market(self) -> Optional[str]:
         """
-        Find a suitable Bitcoin prediction market on Polymarket
+        Find the appropriate BTC Up/Down market based on MARKET_TYPE config
         
         Returns:
-            Market slug or None
+            Market slug for 5m or 15m Up/Down market
         """
-        # Common Bitcoin market slugs on Polymarket
-        bitcoin_markets = [
-            "will-bitcoin-hit-100k-in-2024",
-            "will-bitcoin-hit-90000-before-december-31",
-            "will-bitcoin-be-above-60000-on-december-31",
-            "bitcoin-all-time-high-2024",
-        ]
-        
-        if not self.trader or not self.trader.initialized:
-            return None
-        
-        for slug in bitcoin_markets:
-            market = self.trader.validate_market(slug)
-            if market:
-                return slug
-        
-        return None
+        # Use configured market type (5m or 15m)
+        if arbitrage_config.MARKET_TYPE == 'updown_5m':
+            market_slug = arbitrage_config.UPDOWN_5M_SLUG
+            logger.debug(f"Using 5-minute Up/Down market: {market_slug}")
+            return market_slug
+        else:
+            market_slug = arbitrage_config.UPDOWN_15M_SLUG
+            logger.debug(f"Using 15-minute Up/Down market: {market_slug}")
+            return market_slug
     
     def check_position(self, current_price: float):
         """

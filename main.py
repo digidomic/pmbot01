@@ -287,7 +287,7 @@ def main():
     
     # Strategy selection
     if args.strategy == 'bitcoin_arbitrage':
-        logger.info("PM Bot Starting - Bitcoin Arbitrage Strategy")
+        logger.info("PM Bot Starting - Bitcoin Up/Down Strategy")
     else:
         logger.info("PM Bot Starting - Copy Trading Strategy")
     
@@ -327,10 +327,10 @@ def main():
     
     if args.strategy == 'bitcoin_arbitrage':
         if not STRATEGIES_AVAILABLE:
-            logger.error("Bitcoin Arbitrage strategy not available - check dependencies")
+            logger.error("Bitcoin Up/Down strategy not available - check dependencies")
             sys.exit(1)
         
-        logger.info("🚀 Starting Bitcoin Arbitrage Strategy...")
+        logger.info("🚀 Starting Bitcoin Up/Down Strategy...")
         
         # Create strategy and WebSocket client
         bitcoin_strategy, bitcoin_ws_client = create_bitcoin_arbitrage_strategy(trader)
@@ -341,8 +341,14 @@ def main():
         # Connect to Coinbase WebSocket
         bitcoin_ws_client.start()
         
+        # Get market type from strategy config
+        from config.strategy_config import arbitrage_config
+        market_type = arbitrage_config.MARKET_TYPE
+        
         logger.info(f"📡 Connected to Coinbase WebSocket")
-        logger.info(f"📊 Arbitrage threshold: {config.ARBITRAGE_THRESHOLD if hasattr(config, 'ARBITRAGE_THRESHOLD') else '0.1%'}")
+        logger.info(f"📊 Market Type: {market_type}")
+        logger.info(f"📊 Strategy: BTC rises → BUY YES | BTC falls → BUY NO")
+        logger.info(f"⏱️  Max Hold Time: {'5 minutes' if market_type == 'updown_5m' else '15 minutes'}")
         
         # Stats reporting thread
         def report_stats():
