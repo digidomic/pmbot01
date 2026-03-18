@@ -1,13 +1,16 @@
 """
 Dynamic Market Resolver for BTC Up/Down Markets
 
-Fetches current active market condition IDs from Polymarket API.
+Fetches current active market condition IDs from Polymarket APIs.
 5m and 15m markets rotate every 5/15 minutes with new condition IDs.
+
+Uses:
+- Gamma API (https://gamma-api.polymarket.com) for market discovery
+- CLOB API (https://clob.polymarket.com) as fallback
 """
 import logging
-import re
 import time
-from typing import Optional, Dict, Any
+from typing import Optional, Dict, Any, List
 from dataclasses import dataclass
 from datetime import datetime
 
@@ -37,14 +40,17 @@ class MarketResolver:
     - 5m market: New condition ID every 5 minutes
     - 15m market: New condition ID every 15 minutes
     
-    This resolver fetches the current active market from Polymarket's API
+    This resolver fetches the current active market from Polymarket's Gamma API
     and caches it with automatic refresh.
     """
     
-    # Polymarket GraphQL API endpoint
-    POLYMARKET_API_URL = "https://polymarket.com/api/graphql"
+    # Polymarket Gamma API (public market data)
+    GAMMA_API_URL = "https://gamma-api.polymarket.com"
     
-    # Market type slugs for searching
+    # CLOB API (trading API)
+    CLOB_API_URL = "https://clob.polymarket.com"
+    
+    # Market type patterns for matching
     MARKET_PATTERNS = {
         "5m": ["btc-updown-5m", "bitcoin-updown-5m", "will-bitcoin-be-up-5m"],
         "15m": ["btc-updown-15m", "bitcoin-updown-15m", "will-bitcoin-be-up-15m"]
@@ -81,164 +87,149 @@ class MarketResolver:
         elapsed = time.time() - self._last_update
         return elapsed > self.update_interval or self._current_market is None
     
-    def _query_polymarket_graphql(self, query: str, variables: Dict = None) -> Optional[Dict]:
-        """Execute GraphQL query against Polymarket API"""
-        try:
-            payload = {"query": query}
-            if variables:
-                payload["variables"] = variables
-            
-            response = requests.post(
-                self.POLYMARKET_API_URL,
-                json=payload,
-                headers={
-                    "Content-Type": "application/json",
-                    "Accept": "application/json",
-                    "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.0"
-                },
-                timeout=10
-            )
-            response.raise_for_status()
-            return response.json()
-            
-        except requests.RequestException as e:
-            logger.warning(f"GraphQL request failed: {e}")
-            return None
-        except Exception as e:
-            logger.error(f"Unexpected error in GraphQL query: {e}")
-            return None
-    
-    def _fetch_active_markets(self) -> list[Dict[str, Any]]:
-        """Fetch active BTC Up/Down markets from Polymarket"""
-        # GraphQL query to search for BTC markets
-        query = """
-        query SearchMarkets($search: String!, $limit: Int!) {
-            markets(
-                search: $search
-                limit: $limit
-                active: true
-                closed: false
-                orderBy: "volume"
-                orderDirection: "desc"
-            ) {
-                id
-                conditionId
-                slug
-                question
-                endDate
-                active
-                closed
-                volume
-                liquidity
-            }
-        }
+    def _fetch_from_gamma_api(self) -> Optional[MarketInfo]:
         """
+        Fetch current active market from Polymarket Gamma API
         
-        # Try different search terms
-        search_terms = ["bitcoin up", "btc updown", "will bitcoin be up"]
-        all_markets = []
+        Uses the /events endpoint with search to find BTC Up/Down markets
+        """
+        logger.debug(f"Fetching {self.market_type} market from Gamma API...")
         
-        for search in search_terms:
-            try:
-                result = self._query_polymarket_graphql(
-                    query, 
-                    {"search": search, "limit": 20}
-                )
-                
-                if result and "data" in result and "markets" in result["data"]:
-                    markets = result["data"]["markets"]
-                    all_markets.extend(markets)
-                    
-            except Exception as e:
-                logger.debug(f"Search '{search}' failed: {e}")
-                continue
-        
-        return all_markets
-    
-    def _parse_market_info(self, market_data: Dict) -> Optional[MarketInfo]:
-        """Parse market data into MarketInfo"""
         try:
-            condition_id = market_data.get("conditionId") or market_data.get("condition_id")
-            slug = market_data.get("slug") or market_data.get("market_slug")
-            question = market_data.get("question", "")
+            # Search for active BTC up/down markets
+            search_terms = ["bitcoin updown", "btc updown", "will bitcoin be up"]
             
-            if not condition_id or not slug:
-                return None
-            
-            # Parse end time if available
-            end_time = None
-            end_date_str = market_data.get("endDate") or market_data.get("end_date")
-            if end_date_str:
-                try:
-                    end_time = datetime.fromisoformat(end_date_str.replace('Z', '+00:00'))
-                except:
-                    pass
-            
-            return MarketInfo(
-                condition_id=condition_id,
-                market_slug=slug,
-                question=question,
-                end_time=end_time,
-                active=market_data.get("active", True)
-            )
-            
-        except Exception as e:
-            logger.warning(f"Failed to parse market info: {e}")
-            return None
-    
-    def _matches_market_type(self, market_info: MarketInfo) -> bool:
-        """Check if market matches our target type (5m or 15m)"""
-        slug_lower = market_info.market_slug.lower()
-        question_lower = market_info.question.lower()
-        
-        patterns = self.MARKET_PATTERNS.get(self.market_type, [])
-        
-        for pattern in patterns:
-            if pattern.lower() in slug_lower or pattern.lower() in question_lower:
-                return True
-        
-        # Also check question text for time indicators
-        if self.market_type == "5m":
-            if any(x in question_lower for x in ["5 minute", "5-minute", "5min"]):
-                return True
-        elif self.market_type == "15m":
-            if any(x in question_lower for x in ["15 minute", "15-minute", "15min"]):
-                return True
-        
-        return False
-    
-    def _fetch_from_api(self) -> Optional[MarketInfo]:
-        """Fetch current active market from Polymarket API"""
-        logger.debug(f"Fetching {self.market_type} market from Polymarket API...")
-        
-        markets = self._fetch_active_markets()
-        
-        if not markets:
-            logger.warning("No markets found from API")
-            return None
-        
-        # Filter and parse markets
-        for market_data in markets:
-            market_info = self._parse_market_info(market_data)
-            
-            if market_info and self._matches_market_type(market_info):
-                # Check if market is still active
-                if market_info.end_time and market_info.end_time < datetime.now():
-                    logger.debug(f"Market {market_info.market_slug} has ended")
+            for search in search_terms:
+                url = f"{self.GAMMA_API_URL}/events"
+                params = {
+                    "active": "true",
+                    "closed": "false",
+                    "archived": "false",
+                    "search": search,
+                    "limit": "20",
+                    "order": "volume",
+                    "sort": "desc"
+                }
+                
+                response = requests.get(url, params=params, timeout=15)
+                response.raise_for_status()
+                
+                events = response.json()
+                
+                if not events:
                     continue
                 
-                logger.info(f"Found {self.market_type} market: {market_info.market_slug}")
-                return market_info
+                # Look through events for matching markets
+                for event in events:
+                    markets = event.get("markets", [])
+                    
+                    for market in markets:
+                        slug = market.get("marketSlug") or market.get("slug", "")
+                        question = market.get("question", "")
+                        condition_id = market.get("conditionId") or market.get("condition_id", "")
+                        
+                        if not condition_id or not slug:
+                            continue
+                        
+                        market_info = MarketInfo(
+                            condition_id=condition_id,
+                            market_slug=slug,
+                            question=question,
+                            active=not market.get("closed", False),
+                            end_time=None
+                        )
+                        
+                        if self._matches_market_type(market_info):
+                            # Parse end date if available
+                            end_date_str = market.get("endDate") or event.get("endDate")
+                            if end_date_str:
+                                try:
+                                    market_info.end_time = datetime.fromisoformat(
+                                        end_date_str.replace('Z', '+00:00')
+                                    )
+                                except:
+                                    pass
+                            
+                            logger.info(f"Found {self.market_type} market from Gamma: {slug}")
+                            return market_info
+                
+        except requests.RequestException as e:
+            logger.warning(f"Gamma API request failed: {e}")
+        except Exception as e:
+            logger.error(f"Unexpected error in Gamma API fetch: {e}")
         
-        logger.warning(f"No matching {self.market_type} market found in {len(markets)} markets")
+        return None
+    
+    def _fetch_from_gamma_markets_endpoint(self) -> Optional[MarketInfo]:
+        """
+        Alternative: Fetch directly from /markets endpoint
+        """
+        logger.debug(f"Fetching {self.market_type} market from Gamma markets endpoint...")
+        
+        try:
+            url = f"{self.GAMMA_API_URL}/markets"
+            params = {
+                "active": "true",
+                "closed": "false",
+                "archived": "false",
+                "limit": "50",
+                "order": "volume",
+                "sort": "desc"
+            }
+            
+            response = requests.get(url, params=params, timeout=15)
+            response.raise_for_status()
+            
+            markets = response.json()
+            
+            for market in markets:
+                slug = market.get("marketSlug") or market.get("slug", "")
+                question = market.get("question", "")
+                condition_id = market.get("conditionId") or market.get("condition_id", "")
+                
+                if not condition_id or not slug:
+                    continue
+                
+                market_info = MarketInfo(
+                    condition_id=condition_id,
+                    market_slug=slug,
+                    question=question,
+                    active=not market.get("closed", False),
+                    end_time=None
+                )
+                
+                if self._matches_market_type(market_info):
+                    # Parse end date
+                    end_date_str = market.get("endDate")
+                    if end_date_str:
+                        try:
+                            market_info.end_time = datetime.fromisoformat(
+                                end_date_str.replace('Z', '+00:00')
+                            )
+                        except:
+                            pass
+                    
+                    logger.info(f"Found {self.market_type} market from Gamma markets: {slug}")
+                    return market_info
+                    
+        except requests.RequestException as e:
+            logger.warning(f"Gamma markets endpoint failed: {e}")
+        except Exception as e:
+            logger.error(f"Unexpected error in Gamma markets fetch: {e}")
+        
         return None
     
     def _fetch_from_clob(self) -> Optional[MarketInfo]:
-        """Alternative: Fetch from CLOB API if available"""
+        """
+        Fetch from CLOB API as fallback
+        """
+        logger.debug(f"Fetching {self.market_type} market from CLOB API...")
+        
         try:
-            # Try CLOB markets endpoint
-            url = "https://clob.polymarket.com/markets"
-            response = requests.get(url, params={"active": "true", "closed": "false"}, timeout=10)
+            url = f"{self.CLOB_API_URL}/markets"
+            params = {"active": "true", "closed": "false"}
+            
+            response = requests.get(url, params=params, timeout=15)
             response.raise_for_status()
             
             data = response.json()
@@ -263,10 +254,33 @@ class MarketResolver:
                     logger.info(f"Found {self.market_type} market from CLOB: {slug}")
                     return market_info
                     
+        except requests.RequestException as e:
+            logger.warning(f"CLOB API request failed: {e}")
         except Exception as e:
-            logger.debug(f"CLOB fetch failed: {e}")
+            logger.error(f"Unexpected error in CLOB fetch: {e}")
         
         return None
+    
+    def _matches_market_type(self, market_info: MarketInfo) -> bool:
+        """Check if market matches our target type (5m or 15m)"""
+        slug_lower = market_info.market_slug.lower()
+        question_lower = market_info.question.lower()
+        
+        patterns = self.MARKET_PATTERNS.get(self.market_type, [])
+        
+        for pattern in patterns:
+            if pattern.lower() in slug_lower or pattern.lower() in question_lower:
+                return True
+        
+        # Also check question text for time indicators
+        if self.market_type == "5m":
+            if any(x in question_lower for x in ["5 minute", "5-minute", "5min", "in 5 minutes"]):
+                return True
+        elif self.market_type == "15m":
+            if any(x in question_lower for x in ["15 minute", "15-minute", "15min", "in 15 minutes"]):
+                return True
+        
+        return False
     
     def update(self, force: bool = False) -> bool:
         """
@@ -283,12 +297,17 @@ class MarketResolver:
         
         logger.info(f"Updating {self.market_type} market info...")
         
-        # Try GraphQL API first
-        market_info = self._fetch_from_api()
+        # Try Gamma API first (events endpoint)
+        market_info = self._fetch_from_gamma_api()
+        
+        # Try Gamma markets endpoint
+        if not market_info:
+            logger.debug("Trying Gamma markets endpoint...")
+            market_info = self._fetch_from_gamma_markets_endpoint()
         
         # Fallback to CLOB API
         if not market_info:
-            logger.debug("Trying CLOB API as fallback...")
+            logger.debug("Trying CLOB API...")
             market_info = self._fetch_from_clob()
         
         if market_info:
